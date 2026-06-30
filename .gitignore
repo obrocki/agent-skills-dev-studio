@@ -1,0 +1,18 @@
+# Environment files
+*.env
+
+# Runtime data store (keep the tracked backend/data/.gitkeep, ignore live data)
+data/*.json
+backend/data/*.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# GitHub Copilot agent tracking (ephemeral plans/research/changes, not source)
+.copilot-tracking/
+
+# Frontend build
+frontend/dist/
+frontend/node_modules/

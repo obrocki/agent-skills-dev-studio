@@ -1,0 +1,54 @@
+{
+  // F5 launch configurations for Agent Skills Dev Studio inside the Dev Container.
+  // Pick "Full Stack: Backend + Frontend" in the Run and Debug dropdown, then press F5
+  // to start the FastAPI backend (port 8000) and the Vite dev server (port 5173) together.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Backend: FastAPI (uvicorn)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": [
+        "backend.main:app",
+        "--reload",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8000"
+      ],
+      "cwd": "${workspaceFolder}/",
+      "python": "${workspaceFolder}//.venv/bin/python",
+      "env": { "PYTHONPATH": "${workspaceFolder}/" },
+      "console": "integratedTerminal",
+      "presentation": { "group": "2-individual", "order": 2 }
+    },
+    {
+      "name": "Frontend: Vite dev server",
+      "type": "node",
+      "request": "launch",
+      "cwd": "${workspaceFolder}//frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**"],
+      "serverReadyAction": {
+        "pattern": "Local:\\s+(https?://\\S+)",
+        "uriFormat": "%s",
+        "action": "openExternally"
+      },
+      "presentation": { "group": "2-individual", "order": 3 }
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Full Stack: Backend + Frontend",
+      "configurations": [
+        "Backend: FastAPI (uvicorn)",
+        "Frontend: Vite dev server"
+      ],
+      "stopAll": true,
+      "presentation": { "group": "1-fullstack", "order": 1 }
+    }
+  ]
+}

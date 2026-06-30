@@ -1,0 +1,73 @@
+// Dev Container for Agent Skills Dev Studio (FastAPI + uv backend, React + Vite frontend).
+// Brings up Python, Node, uv, and the Azure CLI, then installs all dependencies.
+{
+  "name": "Agent Skills Dev Studio",
+  "image": "mcr.microsoft.com/devcontainers/python:dev-3.10",
+
+  "features": {
+    "ghcr.io/devcontainers/features/node:2.1.0": { "version": "20" },
+    "ghcr.io/devcontainers/features/azure-cli:1.3.0": {}
+  },
+  // UV_LINK_MODE=copy: uv's cache and the .venv volume are on different
+  // filesystems, so copy instead of hardlink.
+  // AZURE_CORE_ENCRYPT_TOKEN_CACHE=false: the headless container has no system
+  // keyring, so store the Azure CLI token cache as plaintext in the
+  // container-local ~/.azure volume instead of failing to encrypt it.
+  "containerEnv": {
+    "UV_LINK_MODE": "copy",
+    "AZURE_CORE_ENCRYPT_TOKEN_CACHE": "false"
+  },
+  // Keep platform-specific dirs in container-local volumes so the Windows host's
+  // .venv / node_modules don't leak in through the bind mount and break uv/npm.
+  "mounts": [
+    "source=${localWorkspaceFolderBasename}-venv,target=${containerWorkspaceFolder}//.venv,type=volume",
+    "source=${localWorkspaceFolderBasename}-node-modules,target=${containerWorkspaceFolder}//frontend/node_modules,type=volume",
+    // Persist the container's OWN Azure CLI login in a named volume, then sign
+    // in once inside the container with:
+    //   az login --use-device-code --tenant <your-tenant-id>
+    // The login then survives restarts in this volume, and DefaultAzureCredential
+    // (AzureCliCredential) reads it. A host ~/.azure bind mount was tried but a
+    // Windows host's token cache is DPAPI-encrypted and unreadable in a Linux
+    // container ("user does not exist in MSAL token cache"), so the container
+    // keeps its own login here instead.
+    "source=${localWorkspaceFolderBasename}-azure,target=/home/vscode/.azure,type=volume"
+  ],
+
+  // Take ownership of the (root-owned) volume mounts, install uv, sync Python deps, install frontend deps, then
+  // wire load-dotenv.sh into ~/.bashrc so every terminal exports the workspace-root .env (idempotent).
+  "postCreateCommand": "sudo chown vscode:vscode .venv frontend/node_modules /home/vscode/.azure && (pipx install uv || pipx upgrade uv) && cd ${containerWorkspaceFolder} && uv sync && cd frontend && npm install && cd ${containerWorkspaceFolder} && { grep -qxF 'source ${containerWorkspaceFolder}/.devcontainer/load-dotenv.sh' ~/.bashrc || echo 'source ${containerWorkspaceFolder}/.devcontainer/load-dotenv.sh' >> ~/.bashrc; }",
+
+  // Runs on every container start: sign the Azure CLI in as the service principal from .env (no-op if unset).
+  "postStartCommand": "bash .devcontainer/az-login.sh",
+
+  "forwardPorts": [8000, 5173],
+  "portsAttributes": {
+    "8000": { "label": "Portal (API + UI)", "onAutoForward": "notify" },
+    "5173": { "label": "Vite dev server", "onAutoForward": "silent" }
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "charliermarsh.ruff",
+        "ms-azuretools.vscode-azureresourcegroups",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "github.vscode-pull-request-github"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "${workspaceFolder}//.venv/bin/python",
+        "python.terminal.activateEnvironment": true,
+        "[python]": {
+          "editor.defaultFormatter": "charliermarsh.ruff",
+          "editor.formatOnSave": true
+        },
+        "[javascriptreact]": { "editor.defaultFormatter": "esbenp.prettier-vscode" }
+      }
+    }
+  },
+
+  "remoteUser": "vscode"
+}
