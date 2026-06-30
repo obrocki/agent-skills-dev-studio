@@ -56,23 +56,9 @@ flowchart LR
 
 In production the FastAPI backend serves the compiled SPA and the API together on one origin (port 8000). In development, Vite serves the UI on port 5173 and proxies `/api` to the backend.
 
-| Layer | Technology |
-| --- | --- |
-| Frontend | React 18, Vite 5 |
-| Backend | FastAPI, Uvicorn, Python 3.10+ (managed with uv) |
-| Agent | Microsoft Agent Framework with Azure OpenAI |
-| Identity | Microsoft Entra ID via azure-identity |
-| Storage | Local JSON files with atomic writes |
+## Skills on the fly
 
-## The interface
-
-A three-pane layout takes a skill from draft to tested agent without leaving the page.
-
-| Pane | Role |
-| --- | --- |
-| Projects (left) | Create projects, add skills, and tick the skills to include in the agent |
-| Skill editor (center) | Edit name, description, and Markdown body; watch the live score and version history |
-| Agent chat (right) | Chat with the combined agent and read the combination analysis |
+Skills are assembled per request, not baked into the agent. Each time you chat, the backend turns the skills you ticked into Microsoft Agent Framework `InlineSkill` objects on the fly (name, description, and Markdown body), hands them to a `SkillsProvider`, and spins up a fresh agent. That makes it cheap to mix and match: change the selection, send a message, and compare how the new combination behaves, all without redeploying or rewriting a single mega-prompt.
 
 ## Getting started
 
