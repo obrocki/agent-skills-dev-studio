@@ -29,13 +29,14 @@ function renderMarkdown(text) {
 function Validation({ validation }) {
   if (!validation) return null
   return (
-    <div className="validation">
-      <div className="val-head">
+    <details className="validation panel-collapse" open>
+      <summary className="val-head">
+        <span className="collapse-caret" aria-hidden="true" />
         <span>Best-practices rating</span>
         <span className="val-score" style={{ color: validation.color }}>
           {validation.score}/100 · {validation.rating}
         </span>
-      </div>
+      </summary>
       <div className="val-bar">
         <div
           className="val-fill"
@@ -53,7 +54,7 @@ function Validation({ validation }) {
           </li>
         ))}
       </ul>
-    </div>
+    </details>
   )
 }
 
@@ -206,8 +207,12 @@ export default function Editor({ promptId, onSaved }) {
         <span>{status}</span>
       </div>
       <Validation validation={validation} />
-      <div className="versions">
-        <h4>Version history</h4>
+      <details className="versions panel-collapse">
+        <summary>
+          <span className="collapse-caret" aria-hidden="true" />
+          <span>Version history</span>
+          {versions.length > 0 ? <span className="v-count">{versions.length}</span> : null}
+        </summary>
         {versions.length === 0 ? (
           <p className="check-detail">No versions yet — save to create one.</p>
         ) : (
@@ -231,7 +236,7 @@ export default function Editor({ promptId, onSaved }) {
             ))}
           </ul>
         )}
-      </div>
+      </details>
       {pendingDelete && (
         <div
           className="modal-overlay"
