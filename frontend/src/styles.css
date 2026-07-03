@@ -2,8 +2,8 @@
 :root {
   --bg: #f3f4fb;
   --panel: #ffffff; --panel-2: #f8f9fc;
-  --border: #e6e8f1; --line: #eef0f6;
-  --text: #111524; --muted: #6b7280; --faint: #9aa1ad;
+  --border: #d9dce8; --line: #e3e6f0;
+  --text: #0e1220; --muted: #545c6b; --faint: #7c8494;
   --accent: #4f46e5; --accent-d: #4338ca; --accent-soft: #eef2ff;
   --grad: linear-gradient(135deg, #6366f1, #8b5cf6);
   --grad-hover: linear-gradient(135deg, #4f46e5, #7c3aed);
@@ -189,24 +189,27 @@ input:not([type="checkbox"]):not([type="radio"]):focus, textarea:focus { outline
 .empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--muted); text-align: center; padding: 24px; }
 .empty-state svg { color: #c5c9d8; }
 
-/* ---------- Validation ---------- */
-.validation { margin: 16px 0 0; background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
-.val-head { display: flex; align-items: center; font-size: .78rem; margin-bottom: 8px; color: var(--muted); font-weight: 600; }
-.val-score { margin-left: auto; font-weight: 800; font-size: .92rem; }
-
-/* ---------- Collapsible panels ---------- */
+/* ---------- Collapsible panels (best-practices rating, version history) ---------- */
+.panel-collapse { margin-top: 16px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
 .panel-collapse > summary {
   display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; list-style: none;
+  font-size: .72rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
 }
+.panel-collapse > summary:hover { color: var(--text); }
 .panel-collapse > summary::-webkit-details-marker { display: none; }
 .panel-collapse > summary:focus-visible { outline: none; box-shadow: var(--ring); border-radius: 8px; }
+.panel-collapse[open] > summary { margin-bottom: 10px; }
 .collapse-caret {
-  width: 0; height: 0; flex: none; opacity: .7;
+  width: 0; height: 0; flex: none; opacity: .85;
   border-left: 5px solid currentColor; border-top: 4px solid transparent; border-bottom: 4px solid transparent;
   transition: transform .15s ease;
 }
 .panel-collapse[open] > summary .collapse-caret { transform: rotate(90deg); }
-.val-bar { height: 9px; border-radius: 999px; background: #e7e9f1; overflow: hidden; }
+
+/* ---------- Validation ---------- */
+.val-head { display: flex; align-items: center; font-size: .78rem; margin-bottom: 8px; color: var(--muted); font-weight: 600; }
+.val-score { margin-left: auto; font-weight: 800; font-size: .92rem; }
+.val-bar { height: 9px; border-radius: 999px; background: #dde0ec; overflow: hidden; }
 .val-fill { height: 100%; border-radius: 999px; transition: width .35s ease, background .35s ease; }
 .checks { list-style: none; padding: 0; margin: 12px 0 0; font-size: .82rem; display: grid; gap: 3px; }
 .checks li { display: flex; gap: 9px; align-items: center; padding: 2px 0; }
@@ -217,9 +220,6 @@ input:not([type="checkbox"]):not([type="radio"]):focus, textarea:focus { outline
 .check-detail { color: var(--muted); }
 
 /* ---------- Versions ---------- */
-.versions { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 12px; }
-.versions > summary { font-size: .72rem; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); font-weight: 700; }
-.versions[open] > summary { margin-bottom: 8px; }
 .v-count { margin-left: auto; background: var(--accent-soft); color: var(--accent-d); font-weight: 700; font-size: .7rem; padding: 1px 8px; border-radius: 999px; letter-spacing: 0; }
 .versions ul { list-style: none; padding: 0; margin: 0; max-height: 168px; overflow: auto; }
 .versions li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; font-size: .82rem; border-bottom: 1px solid var(--line); }
