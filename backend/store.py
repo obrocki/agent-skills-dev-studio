@@ -41,6 +41,7 @@ class Prompt(BaseModel):
         name: Human-readable prompt name.
         description: Short description of the prompt's purpose.
         content: The prompt/system-instruction body.
+        code: The Python skill code associated with the prompt.
     """
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -48,6 +49,7 @@ class Prompt(BaseModel):
     name: str
     description: str = ""
     content: str = ""
+    code: str = ""
 
 
 class PromptVersion(BaseModel):
@@ -60,6 +62,7 @@ class PromptVersion(BaseModel):
         name: Prompt name at save time.
         description: Prompt description at save time.
         content: Prompt body at save time.
+        code: Python skill code at save time.
         score: Best-practices score (0-100) at save time.
     """
 
@@ -69,6 +72,7 @@ class PromptVersion(BaseModel):
     name: str
     description: str = ""
     content: str = ""
+    code: str = ""
     score: int = 0
 
 
@@ -166,7 +170,11 @@ def get_prompt(prompt_id: str) -> Prompt | None:
 
 
 def create_prompt(
-    project_id: str, name: str, description: str = "", content: str = ""
+    project_id: str,
+    name: str,
+    description: str = "",
+    content: str = "",
+    code: str = "",
 ) -> Prompt:
     """Create and persist a new prompt."""
     prompt = Prompt(
@@ -174,6 +182,7 @@ def create_prompt(
         name=name,
         description=description,
         content=content,
+        code=code,
     )
     prompts = _read(_PROMPTS_FILE)
     prompts.append(prompt.model_dump())
@@ -186,6 +195,7 @@ def update_prompt(
     name: str,
     description: str = "",
     content: str = "",
+    code: str = "",
 ) -> Prompt | None:
     """Update a prompt; return ``None`` when not found."""
     prompts = _read(_PROMPTS_FILE)
@@ -194,6 +204,7 @@ def update_prompt(
             item["name"] = name
             item["description"] = description
             item["content"] = content
+            item["code"] = code
             _write(_PROMPTS_FILE, prompts)
             return Prompt(**item)
     return None
@@ -221,6 +232,7 @@ def add_version(prompt: Prompt, score: int) -> PromptVersion:
         name=prompt.name,
         description=prompt.description,
         content=prompt.content,
+        code=prompt.code,
         score=score,
     )
     items = _read(_VERSIONS_FILE)

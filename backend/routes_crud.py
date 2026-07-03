@@ -25,6 +25,7 @@ class PromptIn(BaseModel):
     name: str
     description: str = ""
     content: str = ""
+    code: str = ""
 
 
 class PromptSaveResult(BaseModel):
@@ -77,7 +78,7 @@ def get_project_prompts(project_id: str) -> list[store.Prompt]:
 @router.post("/prompts", response_model=store.Prompt, status_code=201)
 def create_prompt(body: PromptIn) -> store.Prompt:
     return store.create_prompt(
-        body.project_id, body.name, body.description, body.content
+        body.project_id, body.name, body.description, body.content, body.code
     )
 
 
@@ -92,7 +93,7 @@ def get_prompt(prompt_id: str) -> store.Prompt:
 @router.put("/prompts/{prompt_id}", response_model=PromptSaveResult)
 def update_prompt(prompt_id: str, body: PromptIn) -> PromptSaveResult:
     prompt = store.update_prompt(
-        prompt_id, body.name, body.description, body.content
+        prompt_id, body.name, body.description, body.content, body.code
     )
     if prompt is None:
         raise HTTPException(status_code=404, detail="Prompt not found")

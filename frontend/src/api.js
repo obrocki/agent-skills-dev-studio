@@ -22,7 +22,7 @@ export const api = {
     fetch('/api/prompts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ project_id: projectId, name, description: '', content: '' }),
+      body: JSON.stringify({ project_id: projectId, name, description: '', content: '', code: '' }),
     }).then(jsonOrThrow),
   getPrompt: (id) => fetch(`/api/prompts/${id}`).then(jsonOrThrow),
   validatePrompt: (id) => fetch(`/api/prompts/${id}/validate`).then(jsonOrThrow),
@@ -48,6 +48,7 @@ export const api = {
         name: prompt.name,
         description: prompt.description,
         content: prompt.content,
+        code: prompt.code || '',
       }),
     }).then(jsonOrThrow),
   evaluateAgent: (promptIds) =>

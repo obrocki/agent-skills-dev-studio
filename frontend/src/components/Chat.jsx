@@ -61,6 +61,8 @@ export default function Chat({ activeSkills }) {
     const params = new URLSearchParams()
     activeIds.forEach((id) => params.append('prompt_ids', id))
     params.append('q', userText)
+    params.append('time_zone', Intl.DateTimeFormat().resolvedOptions().timeZone)
+    params.append('locale', navigator.language)
     const es = new EventSource(`/api/chat?${params.toString()}`)
     es.onmessage = (e) => {
       if (e.data === '[DONE]') {

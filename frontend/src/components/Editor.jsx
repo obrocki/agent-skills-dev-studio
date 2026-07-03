@@ -7,6 +7,8 @@ import {
   NAME_PLACEHOLDER,
   DESCRIPTION_PLACEHOLDER,
   CONTENT_PLACEHOLDER,
+  CODE_HELP,
+  CODE_PLACEHOLDER,
 } from '../tooltips.js'
 
 // Naive Markdown preview: headings, bold, and line breaks. Kept minimal for the MVP.
@@ -142,7 +144,7 @@ export default function Editor({ promptId, onSaved }) {
   }
 
   function loadVersion(v) {
-    setPrompt({ ...prompt, name: v.name, description: v.description, content: v.content })
+    setPrompt({ ...prompt, name: v.name, description: v.description, content: v.content, code: v.code })
     setStatus(`Loaded v${v.version} — Save to keep`)
   }
 
@@ -191,6 +193,14 @@ export default function Editor({ promptId, onSaved }) {
           dangerouslySetInnerHTML={{ __html: renderMarkdown(prompt.content) }}
         />
       </div>
+      <label title={CODE_HELP}>Python code (optional — runs as a tool)</label>
+      <textarea
+        className="code-editor"
+        value={prompt.code || ''}
+        placeholder={CODE_PLACEHOLDER}
+        spellCheck={false}
+        onChange={(e) => setPrompt({ ...prompt, code: e.target.value })}
+      />
       <div className="editor-actions">
         <button onClick={save}>Save</button>
         <span>{status}</span>

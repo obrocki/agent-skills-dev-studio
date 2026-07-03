@@ -12,7 +12,7 @@
 
 <img width="2822" height="1849" alt="image" src="https://github.com/user-attachments/assets/44a0a5ed-1a67-4bc6-b31d-ea7f8407f997" />
 
-**Agent Skills Dev Studio** is a local, single-user web portal for authoring Microsoft Agent Skills and watching how they behave, both on their own and combined, against a live Azure OpenAI agent. Group skills into projects, edit them in Markdown with a live best-practices score, keep a full version history, then select several at once and chat with the single agent they form.
+**Agent Skills Dev Studio** is a local, single-user web portal for authoring Microsoft Agent Skills and watching how they behave, both on their own and combined, against a live Azure OpenAI agent. Group skills into projects, edit them in Markdown with a live best-practices score, keep a full version history, optionally attach self-contained Python that runs as a tool during the chat, then select several at once and chat with the single agent they form.
 
 Authentication runs entirely through Microsoft Entra ID (managed identity or `az login`). No API keys or connection strings are stored anywhere.
 
@@ -23,6 +23,7 @@ Authentication runs entirely through Microsoft Entra ID (managed identity or `az
 | Skill authoring | Markdown editor with live preview, organized into projects |
 | Best-practices score | A 0 to 100 rating with a per-check breakdown that updates as you type |
 | Version history | Every save is snapshotted; reload or delete any past version |
+| Executable skills | Attach self-contained Python that runs as a sandboxed tool during the chat, localized to your browser |
 | Multi-skill agent | Tick several skills and chat with the one agent they combine into |
 | Combination analysis | Flags conflicts, contradictions, overlaps, and gaps between selected skills |
 | Streaming chat | Token-by-token replies over server-sent events |
@@ -49,6 +50,7 @@ flowchart LR
 
     API --> Chat
     Chat -->|Entra ID token| AOAI["Azure OpenAI"]
+    Chat -->|code tool| Exec["Sandboxed Python<br/>(subprocess)"]
 ```
 
 > [!NOTE]
@@ -59,6 +61,31 @@ In production the FastAPI backend serves the compiled SPA and the API together o
 ## Skills on the fly
 
 Skills are assembled per request, not baked into the agent. Each time you chat, the backend turns the skills you ticked into Microsoft Agent Framework `InlineSkill` objects on the fly (name, description, and Markdown body), hands them to a `SkillsProvider`, and spins up a fresh agent. That makes it cheap to mix and match: change the selection, send a message, and compare how the new combination behaves, all without redeploying or rewriting a single mega-prompt.
+
+## Executable skills
+
+A skill can do more than instruct the model: it can carry self-contained Python that runs as part of the invocation. Add code in the editor's **Python code** pane, and when the skill is active the agent gets a matching `run_<skill>` tool. The model calls it when the skill's instructions ask, the code runs, and its output flows back into the reply.
+
+The code runs in an isolated subprocess with a timeout, a scrubbed environment, and resource limits. This is deliberate, sandboxed execution for a local, single-user studio, not a boundary for untrusted input, so only run code you trust.
+
+Your browser's timezone and locale travel with each chat message, so a skill can localize what it returns. The code receives a JSON object on stdin with `time_zone`, `locale`, and `user_input`, and prints its result to stdout.
+
+The bundled **localized-time** skill shows the pattern end to end. Its Python reads the browser context and prints the current time formatted for your locale:
+
+```python
+import json, sys
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+from babel.dates import format_datetime
+
+data = json.load(sys.stdin)
+tz = data.get("time_zone") or "UTC"
+locale = (data.get("locale") or "en-US").replace("-", "_")
+now = datetime.now(timezone.utc)
+print(format_datetime(now, format="full", tzinfo=ZoneInfo(tz), locale=locale))
+```
+
+Ask "what time is it?" with that skill active and the agent calls the tool, then answers with a timestamp localized to your browser, for example `Thursday, July 2, 2026, 11:58:01 AM Eastern Daylight Time`.
 
 ## Getting started
 
@@ -148,7 +175,8 @@ Grant whichever identity you use the **Cognitive Services OpenAI User** role on 
 backend/            FastAPI app
   routes_crud.py    Projects, skills, and version endpoints
   routes_chat.py    Streaming chat, agent evaluation, health
-  chat.py           Agent and Azure OpenAI client (Entra ID)
+  chat.py           Agent, Azure OpenAI client (Entra ID), skill code tools
+  skill_exec.py     Sandboxed subprocess runner for skill Python
   validate.py       Best-practices scoring
   store.py          Atomic JSON persistence
   data/             Runtime store (gitignored)
@@ -161,7 +189,7 @@ start.ps1           Windows launcher
 
 ## How it works
 
-Skills load through the Agent Framework SkillsProvider instead of being concatenated into one large prompt. Each skill is advertised by name and description, and the agent pulls a full skill body on demand through the `load_skill` tool. Where skills overlap, the agent combines them; where they conflict, it applies the most restrictive rule and points out the conflict. The combination analysis runs the same selection through a scorer that reports conflicts, contradictions, overlaps, and gaps before you start chatting.
+Skills load through the Agent Framework SkillsProvider instead of being concatenated into one large prompt. Each skill is advertised by name and description, and the agent pulls a full skill body on demand through the `load_skill` tool. When a skill includes Python, the agent also gets a matching `run_<skill>` tool that executes the code in an isolated subprocess and feeds the result back into the reply. Where skills overlap, the agent combines them; where they conflict, it applies the most restrictive rule and points out the conflict. The combination analysis runs the same selection through a scorer that reports conflicts, contradictions, overlaps, and gaps before you start chatting.
 
 ## License
 

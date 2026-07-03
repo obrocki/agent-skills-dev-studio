@@ -4,6 +4,7 @@ Exposes a streaming chat endpoint that builds a per-request agent from one or
 more stored skill prompts, plus an endpoint that scores how well the selected
 skills combine (conflicts, contradictions, overlaps).
 """
+
 import logging
 
 from fastapi import APIRouter, HTTPException, Query
@@ -24,7 +25,11 @@ class EvaluateIn(BaseModel):
 
 def _load_prompts(prompt_ids: list[str]) -> list:
     """Fetch existing prompts for the given ids, skipping any that are missing."""
-    return [p for p in (store.get_prompt(pid) for pid in prompt_ids) if p is not None]
+    return [
+        p
+        for p in (store.get_prompt(pid) for pid in prompt_ids)
+        if p is not None
+    ]
 
 
 @router.get("/chat")
@@ -32,6 +37,8 @@ def stream_chat(
     q: str = Query(...),
     prompt_ids: list[str] | None = Query(default=None),
     prompt_id: str | None = Query(default=None),
+    time_zone: str | None = Query(default=None),
+    locale: str | None = Query(default=None),
 ) -> StreamingResponse:
     """Stream an agent reply for ``q`` using one or more skills' instructions.
 
@@ -39,6 +46,8 @@ def stream_chat(
         q: The user's question.
         prompt_ids: Identifiers of the skills to combine into the agent.
         prompt_id: Single-skill fallback for backward compatibility.
+        time_zone: The caller's IANA time zone, threaded to skill executors.
+        locale: The caller's BCP 47 locale, threaded to skill executors.
 
     Returns:
         StreamingResponse: A ``text/event-stream`` of ``data:`` lines.
@@ -51,7 +60,7 @@ def stream_chat(
     if not prompts:
         raise HTTPException(status_code=404, detail="No matching skills found")
 
-    agent = chat.build_agent(prompts)
+    agent = chat.build_agent(prompts, time_zone=time_zone, locale=locale)
 
     async def event_source():
         try:

@@ -152,6 +152,14 @@ input:not([type="checkbox"]):not([type="radio"]):focus, textarea:focus { outline
   height: 100%; min-height: 320px; resize: vertical;
   font-family: ui-monospace, "Cascadia Code", "Consolas", monospace; font-size: 13px; line-height: 1.55;
 }
+.code-editor {
+  width: 100%;
+  min-height: 140px;
+  resize: vertical;
+  font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+  font-size: 12px;
+  white-space: pre;
+}
 .preview { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px 16px; overflow: auto; background: var(--panel-2); }
 .preview h1, .preview h2, .preview h3 { margin: .45rem 0 .3rem; line-height: 1.25; }
 .preview h1 { font-size: 1.3rem; }

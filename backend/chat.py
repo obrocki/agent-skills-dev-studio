@@ -28,7 +28,7 @@ from azure.identity.aio import (
     ManagedIdentityCredential,
 )
 
-from backend import config
+from backend import config, skill_exec
 
 logger = logging.getLogger("agent_skill_portal.chat")
 
@@ -38,7 +38,9 @@ _AGENT_INSTRUCTIONS = (
     "then follow all of them at the same time. Where skills overlap, combine "
     "them. Where skills conflict, apply the most restrictive rule and briefly "
     "tell the user about the conflict. Use read_skill_resource for any resources "
-    "a skill references."
+    "a skill references. "
+    "When an advertised skill provides an executable tool (named run_...), call "
+    "that tool to perform the skill's action and use its output in your answer."
 )
 
 
@@ -152,29 +154,67 @@ def _to_skills(prompts: list) -> list[InlineSkill]:
     return skills
 
 
-def build_agent(prompts) -> Agent:
+def _tool_name(skill_name: str) -> str:
+    """Framework tool name for a skill's executor (unique, identifier-safe)."""
+    return "run_" + re.sub(r"[^a-z0-9]+", "_", skill_name.lower()).strip("_")
+
+
+def _make_skill_tool(code: str, skill_name: str, description: str, ctx: dict):
+    """Build a sync callable tool that executes one skill's Python."""
+
+    def run_skill(user_input: str = "") -> str:
+        return skill_exec.run(code, {**ctx, "user_input": user_input})
+
+    run_skill.__name__ = _tool_name(skill_name)
+    run_skill.__doc__ = (
+        f"Execute the '{skill_name}' skill's code and return its output. "
+        f"{description}".strip()
+    )
+    return run_skill
+
+
+def build_agent(
+    prompts,
+    time_zone: str | None = None,
+    locale: str | None = None,
+) -> Agent:
     """Create an agent that loads and follows every supplied skill.
 
     Skills are exposed through the framework's :class:`SkillsProvider` so they
     are advertised (name + description) and loaded on demand instead of being
-    concatenated into a single large system prompt.
+    concatenated into a single large system prompt. Each skill that carries
+    executable ``code`` also contributes one uniquely named ``run_*`` tool that
+    runs that skill's Python; browser localization (``time_zone``/``locale``)
+    is threaded into every such tool's execution context.
 
     Args:
         prompts: A single prompt object or a list of them, each exposing
-            ``name``, ``description``, and ``content``.
+            ``name``, ``description``, ``content``, and optionally ``code``.
+        time_zone: The caller's IANA time zone, passed to skill executors.
+        locale: The caller's BCP 47 locale, passed to skill executors.
 
     Returns:
         Agent: A Microsoft Agent Framework agent connected to Azure OpenAI via
-        managed identity, with the selected skills attached.
+        managed identity, with the selected skills and their execution tools
+        attached.
     """
     prompt_list = prompts if isinstance(prompts, list) else [prompts]
     skills = _to_skills(prompt_list)
     names = ", ".join(s.frontmatter.name for s in skills) or "Skill Agent"
+    ctx = {"time_zone": time_zone, "locale": locale}
+    tools = [
+        _make_skill_tool(
+            p.code, s.frontmatter.name, s.frontmatter.description, ctx
+        )
+        for p, s in zip(prompt_list, skills)
+        if (getattr(p, "code", "") or "").strip()
+    ]
     return Agent(
         client=_build_client(config.load_settings()),
         name=f"Skill Agent ({names})"[:64],
         instructions=_AGENT_INSTRUCTIONS,
         context_providers=[SkillsProvider(skills)],
+        tools=tools,
     )
 
 

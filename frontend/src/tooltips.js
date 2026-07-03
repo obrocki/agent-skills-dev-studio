@@ -22,3 +22,11 @@ export const DESCRIPTION_PLACEHOLDER =
   'Extract text and tables from PDF files and fill forms. Use when working with PDFs, forms, or document extraction.'
 
 export const CONTENT_PLACEHOLDER = '# Skill body\n\nDescribe steps, examples, and guardrails in Markdown.'
+
+export const CODE_HELP =
+  'Python code (optional): runs as an agent tool when the skill is invoked. ' +
+  'It receives a JSON object on stdin with "time_zone", "locale", and "user_input", ' +
+  'and should print its result to stdout.'
+
+export const CODE_PLACEHOLDER =
+  'import sys, json\ndata = json.load(sys.stdin)\nprint(data["user_input"])'
