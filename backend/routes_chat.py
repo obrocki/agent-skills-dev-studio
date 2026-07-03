@@ -183,6 +183,7 @@ def stream_chat(
                             key, {"name": None, "arguments": ""}
                         )
                         slot["error"] = getattr(content, "exception", None)
+                        slot["result"] = getattr(content, "result", None)
                 text = getattr(chunk, "text", None)
                 if text:
                     full_reply.append(text)

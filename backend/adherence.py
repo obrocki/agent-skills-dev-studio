@@ -94,6 +94,61 @@ def _as_dict(arguments) -> dict:
     return {}
 
 
+def _response_with_tools(answer: str, calls: dict):
+    """Represent the run as an agent response that surfaces tool activity.
+
+    The SDK adherence judges only inspect the ``response`` they are handed, so a
+    plain answer string hides that a ``run_*`` tool ran and makes a tool-backed
+    skill look like a fabricated claim. When any named tool call was captured,
+    the reply is rebuilt as the SDK's agent-message list — an assistant
+    ``tool_call`` turn, the matching ``tool_result`` turns, then the final
+    assistant text — so the judge can see the tool was invoked and what it
+    returned. With no captured tool call, ``answer`` is returned unchanged.
+
+    Args:
+        answer: The agent's final reply text.
+        calls: A mapping of call id to ``{"name", "arguments", "result", ...}``
+            for each tool the agent invoked.
+
+    Returns:
+        str | list[dict]: ``answer`` when no tool call was captured, otherwise a
+        list of agent messages carrying the tool calls, their results, and the
+        final text.
+    """
+    tool_calls: list[dict] = []
+    tool_results: list[dict] = []
+    for call_id, c in calls.items():
+        name = c.get("name")
+        if not name:
+            continue
+        tool_calls.append(
+            {
+                "type": "tool_call",
+                "tool_call_id": call_id,
+                "name": name,
+                "arguments": _as_dict(c.get("arguments")),
+            }
+        )
+        result = c.get("result")
+        if result is not None:
+            tool_results.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": [
+                        {"type": "tool_result", "tool_result": result}
+                    ],
+                }
+            )
+    if not tool_calls:
+        return answer
+    return [
+        {"role": "assistant", "content": tool_calls},
+        *tool_results,
+        {"role": "assistant", "content": [{"type": "text", "text": answer}]},
+    ]
+
+
 def _scale_1_5(score: float) -> int:
     """Map a 1-5 evaluator score onto a 0-100 scale.
 
@@ -180,13 +235,17 @@ def _unavailable_contract(summary: str) -> dict:
     }
 
 
-async def _task_adherence(query, response: str) -> dict:
+async def _task_adherence(query, response, tool_definitions=None) -> dict:
     """Run the SDK task-adherence judge and map it onto the contract.
 
     Args:
         query: The judge ``query`` — either a plain user request string or a
             message list carrying skill instructions as a system message.
-        response: The agent's reply to judge.
+        response: The agent's reply to judge — a plain string, or an agent
+            message list surfacing the tool calls and their results.
+        tool_definitions: The ``run_*`` tool schemas the agent was offered, so
+            the judge can weigh whether required tools were used. Omitted from
+            the judge call when empty.
 
     Returns:
         dict: The eval-frame contract; the Unavailable contract when the judge
@@ -197,10 +256,18 @@ async def _task_adherence(query, response: str) -> dict:
         credential=chat.build_sync_credential(),
         is_reasoning_model=True,
     )
+
+    def _judge():
+        if tool_definitions:
+            return evaluator(
+                query=query,
+                response=response,
+                tool_definitions=tool_definitions,
+            )
+        return evaluator(query=query, response=response)
+
     try:
-        result = await asyncio.to_thread(
-            lambda: evaluator(query=query, response=response)
-        )
+        result = await asyncio.to_thread(_judge)
     except Exception:
         logger.exception("Task adherence judge failed")
         return _unavailable_contract("Adherence unavailable.")
@@ -219,7 +286,9 @@ async def _task_adherence(query, response: str) -> dict:
     )
 
 
-async def skill_adherence(query: str, response: str, context: str) -> dict:
+async def skill_adherence(
+    query: str, response, context: str, tool_definitions=None
+) -> dict:
     """Judge whether ``response`` followed the skill instructions in ``context``.
 
     The skill instructions ride in a ``system`` message inside the judge
@@ -228,8 +297,10 @@ async def skill_adherence(query: str, response: str, context: str) -> dict:
 
     Args:
         query: The user's request.
-        response: The agent's reply to judge.
+        response: The agent's reply to judge — a plain string or an agent
+            message list surfacing the tool calls and their results.
         context: The combined skill instructions the agent was given.
+        tool_definitions: The ``run_*`` tool schemas the agent was offered.
 
     Returns:
         dict: The eval-frame contract from :func:`_task_adherence`.
@@ -240,20 +311,23 @@ async def skill_adherence(query: str, response: str, context: str) -> dict:
             {"role": "user", "content": query},
         ],
         response,
+        tool_definitions,
     )
 
 
-async def task_adherence(query: str, response: str) -> dict:
+async def task_adherence(query: str, response, tool_definitions=None) -> dict:
     """Judge whether ``response`` actually fulfilled the user's ``query``.
 
     Args:
         query: The user's request.
-        response: The agent's reply to judge.
+        response: The agent's reply to judge — a plain string or an agent
+            message list surfacing the tool calls and their results.
+        tool_definitions: The ``run_*`` tool schemas the agent was offered.
 
     Returns:
         dict: The eval-frame contract from :func:`_task_adherence`.
     """
-    return await _task_adherence(query, response)
+    return await _task_adherence(query, response, tool_definitions)
 
 
 async def evaluate_tool_calls(
@@ -341,7 +415,7 @@ async def run_all(query: str, answer: str, prompts, calls: dict) -> list[dict]:
         answer: The agent's final reply.
         prompts: A single prompt object or a list of them, each exposing
             ``name``, ``content``, and optionally ``code``.
-        calls: A mapping of call id to ``{"name": str, "arguments": ...}`` for
+        calls: A mapping of call id to ``{"name", "arguments", "result"}`` for
             each tool the agent actually invoked.
 
     Returns:
@@ -350,21 +424,22 @@ async def run_all(query: str, answer: str, prompts, calls: dict) -> list[dict]:
     """
     plist = prompts if isinstance(prompts, list) else [prompts]
     skill_ctx = "\n\n".join((getattr(p, "content", "") or "") for p in plist)
+    tool_defs = chat.run_tool_definitions(plist)
+    response = _response_with_tools(answer, calls)
 
     frames: list[dict] = [
         {
             "key": "skill",
             "title": "Skill adherence",
-            **await skill_adherence(query, answer, skill_ctx),
+            **await skill_adherence(query, response, skill_ctx, tool_defs),
         },
         {
             "key": "task",
             "title": "Task adherence",
-            **await task_adherence(query, answer),
+            **await task_adherence(query, response, tool_defs),
         },
     ]
 
-    tool_defs = chat.run_tool_definitions(plist)
     if tool_defs:
         frames.append(
             {

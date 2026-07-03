@@ -120,6 +120,43 @@ def test_as_dict_coercions():
     assert adherence._as_dict(None) == {}
 
 
+# --- _response_with_tools surfacing -----------------------------------------
+
+
+def test_response_with_tools_surfaces_calls_and_results():
+    # Arrange: one captured tool call with parsed arguments and a result.
+    calls = {
+        "call-1": {
+            "name": "run_localized_time",
+            "arguments": '{"user_input": "what time"}',
+            "result": "Friday, 3 July 2026",
+        }
+    }
+
+    # Act
+    response = adherence._response_with_tools("Friday, 3 July 2026", calls)
+
+    # Assert: an agent message list with the tool call, its result, and text.
+    assert isinstance(response, list)
+    assert response[0]["role"] == "assistant"
+    call_item = response[0]["content"][0]
+    assert call_item["type"] == "tool_call"
+    assert call_item["tool_call_id"] == "call-1"
+    assert call_item["name"] == "run_localized_time"
+    assert call_item["arguments"] == {"user_input": "what time"}
+    tool_msg = response[1]
+    assert tool_msg["role"] == "tool"
+    assert tool_msg["content"][0]["tool_result"] == "Friday, 3 July 2026"
+    assert response[-1]["content"][0]["text"] == "Friday, 3 July 2026"
+
+
+def test_response_with_tools_plain_string_without_calls():
+    # Assert: no captured tool call returns the answer unchanged.
+    assert adherence._response_with_tools("hi", {}) == "hi"
+    # A call missing a name is ignored (kept off the transcript).
+    assert adherence._response_with_tools("hi", {"c": {"name": None}}) == "hi"
+
+
 # --- evaluate_tool_calls offline no-call path --------------------------------
 
 
@@ -143,7 +180,7 @@ def test_evaluate_tool_calls_no_call_offline():
 def _install_async_fakes(monkeypatch):
     """Replace the three SDK-backed judges with fixed-contract async fakes."""
 
-    async def fake_skill(query, response, context):
+    async def fake_skill(query, response, context, tool_definitions=None):
         return {
             "score": 90,
             "rating": "Adherent",
@@ -152,7 +189,7 @@ def _install_async_fakes(monkeypatch):
             "findings": [],
         }
 
-    async def fake_task(query, response):
+    async def fake_task(query, response, tool_definitions=None):
         return {
             "score": 70,
             "rating": "Partial",
