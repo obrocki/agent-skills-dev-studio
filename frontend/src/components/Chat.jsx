@@ -9,7 +9,15 @@ export default function Chat({ activeSkills }) {
   const [busy, setBusy] = useState(false)
   const [evalResult, setEvalResult] = useState(null)
   const [evalBusy, setEvalBusy] = useState(false)
+  const [logs, setLogs] = useState([])
   const outRef = useRef(null)
+  const logsRef = useRef(null)
+
+  const pushLog = (level, msg) =>
+    setLogs((prev) => [
+      ...prev,
+      { level, msg, time: new Date().toLocaleTimeString() },
+    ])
 
   const activeIds = activeSkills.map((s) => s.id)
   const activeKey = activeIds.join(',')
@@ -42,6 +50,12 @@ export default function Chat({ activeSkills }) {
     if (el) el.scrollTop = el.scrollHeight
   }, [messages])
 
+  // Keep the newest activity entry in view as execution updates stream in.
+  useEffect(() => {
+    const el = logsRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [logs])
+
   function send() {
     if (!hasSkills || busy || !q.trim()) return
     const userText = q.trim()
@@ -49,6 +63,7 @@ export default function Chat({ activeSkills }) {
     // Show the user's message immediately, with an empty assistant bubble to stream into.
     setMessages((prev) => [...prev, { role: 'user', text: userText }, { role: 'assistant', text: '' }])
     setBusy(true)
+    pushLog('send', `Sent: ${userText}`)
 
     const appendToReply = (chunk) =>
       setMessages((prev) => {
@@ -64,13 +79,28 @@ export default function Chat({ activeSkills }) {
     params.append('time_zone', Intl.DateTimeFormat().resolvedOptions().timeZone)
     params.append('locale', navigator.language)
     const es = new EventSource(`/api/chat?${params.toString()}`)
+    let finished = false
+
+    // Execution updates travel on a dedicated `log` event so they never mix
+    // into the assistant message that `onmessage` assembles.
+    es.addEventListener('log', (e) => {
+      try {
+        const d = JSON.parse(e.data)
+        pushLog(d.level || 'info', d.msg || '')
+      } catch {
+        /* ignore a malformed log frame */
+      }
+    })
+    es.onopen = () => pushLog('info', 'Connected to agent stream.')
     es.onmessage = (e) => {
       if (e.data === '[DONE]') {
+        finished = true
         es.close()
         setBusy(false)
         return
       }
       if (e.data === '[ERROR]') {
+        finished = true
         es.close()
         setBusy(false)
         appendToReply('\n[chat failed]')
@@ -80,6 +110,7 @@ export default function Chat({ activeSkills }) {
     }
     es.onerror = () => {
       es.close()
+      if (!finished) pushLog('error', 'Stream disconnected.')
       setBusy(false)
     }
   }
@@ -166,6 +197,47 @@ export default function Chat({ activeSkills }) {
         <button onClick={send} disabled={!hasSkills || busy}>
           Send
         </button>
+      </div>
+
+      <div className="chat-logs">
+        <div className="logs-head">
+          <span className="logs-title">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M4 6h16M4 12h16M4 18h10" />
+            </svg>
+            Activity log
+          </span>
+          <div className="logs-actions">
+            <span className="logs-count" aria-label={`${logs.length} log entries`}>{logs.length}</span>
+            <button
+              type="button"
+              className="logs-clear"
+              onClick={() => setLogs([])}
+              disabled={logs.length === 0}
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+        <div
+          className="logs-body"
+          ref={logsRef}
+          role="log"
+          aria-live="polite"
+          aria-label="Agent execution activity"
+        >
+          {logs.length === 0 ? (
+            <p className="logs-empty">Live execution updates appear here when you run the agent.</p>
+          ) : (
+            logs.map((l, i) => (
+              <div key={i} className={`log-line log-${l.level}`}>
+                <span className="log-dot" aria-hidden="true" />
+                <time className="log-time">{l.time}</time>
+                <span className="log-msg">{l.msg}</span>
+              </div>
+            ))
+          )}
+        </div>
       </div>
     </div>
   )

@@ -5,7 +5,9 @@ more stored skill prompts, plus an endpoint that scores how well the selected
 skills combine (conflicts, contradictions, overlaps).
 """
 
+import json
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -15,6 +17,69 @@ from backend import agenteval, chat, store
 
 logger = logging.getLogger("agent_skill_portal.chat")
 router = APIRouter()
+
+
+def _sse_log(level: str, message: str) -> str:
+    """Format one activity-log entry as a named ``log`` server-sent event.
+
+    These frames ride the same stream as the reply text but carry an
+    ``event: log`` name so the browser routes them to the activity panel via a
+    dedicated listener, leaving the assistant message that ``onmessage``
+    assembles untouched.
+
+    Args:
+        level: A severity/category tag ("info", "tool", "done", "error", …)
+            used by the client to colour the entry.
+        message: The human-readable status line to display.
+
+    Returns:
+        str: A ready-to-yield SSE frame terminated by a blank line.
+    """
+    payload = json.dumps(
+        {
+            "level": level,
+            "msg": message,
+            "t": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+    )
+    return f"event: log\ndata: {payload}\n\n"
+
+
+def _tool_log(
+    content, seen_calls: set[str], seen_results: set[str]
+) -> str | None:
+    """Build a one-shot log frame for a tool call or result content item.
+
+    Streaming updates deliver a single tool invocation across several
+    fragments (the name arrives first, then the arguments accumulate); the
+    ``seen_*`` sets make sure each call and its result are announced exactly
+    once rather than on every fragment.
+
+    Args:
+        content: A framework ``Content`` item from a streamed chunk.
+        seen_calls: Call identifiers already announced as "calling".
+        seen_results: Call identifiers already announced as "finished".
+
+    Returns:
+        str | None: An SSE ``log`` frame, or ``None`` when this item needs no
+        new entry.
+    """
+    ctype = getattr(content, "type", None)
+    if ctype == "function_call":
+        name = getattr(content, "name", None)
+        key = getattr(content, "call_id", None) or name
+        if name and key not in seen_calls:
+            seen_calls.add(key)
+            return _sse_log("tool", f"Calling tool: {name}")
+    elif ctype == "function_result":
+        key = getattr(content, "call_id", None)
+        if key and key not in seen_results:
+            seen_results.add(key)
+            exception = getattr(content, "exception", None)
+            if exception:
+                return _sse_log("error", f"Tool error: {exception}")
+            return _sse_log("tool", "Tool finished.")
+    return None
 
 
 class EvaluateIn(BaseModel):
@@ -61,17 +126,41 @@ def stream_chat(
         raise HTTPException(status_code=404, detail="No matching skills found")
 
     agent = chat.build_agent(prompts, time_zone=time_zone, locale=locale)
+    skill_names = ", ".join(
+        (getattr(p, "name", "") or "").strip() or "unnamed" for p in prompts
+    )[:160]
 
     async def event_source():
+        seen_calls: set[str] = set()
+        seen_results: set[str] = set()
+        answering = False
+        yield _sse_log(
+            "info",
+            f"Assembling agent from {len(prompts)} skill(s): {skill_names}.",
+        )
+        yield _sse_log(
+            "info", "Contacting Azure OpenAI and streaming the reply…"
+        )
         try:
             async for chunk in agent.run(q, stream=True):
+                for content in getattr(chunk, "contents", None) or []:
+                    frame = _tool_log(content, seen_calls, seen_results)
+                    if frame:
+                        yield frame
                 text = getattr(chunk, "text", None)
                 if text:
+                    if not answering:
+                        answering = True
+                        yield _sse_log(
+                            "info", "Model is composing the answer…"
+                        )
                     for line in text.split("\n"):
                         yield f"data: {line}\n"
                     yield "\n"
+            yield _sse_log("done", "Reply complete.")
         except Exception:
             logger.exception("Chat agent run failed for skills %s", ids)
+            yield _sse_log("error", "The agent run failed — see server logs.")
             yield "data: [ERROR]\n\n"
         yield "data: [DONE]\n\n"
 
