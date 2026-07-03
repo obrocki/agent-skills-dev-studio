@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from backend import agenteval, chat, store
+from backend import adherence, agenteval, chat, store
 
 logger = logging.getLogger("agent_skill_portal.chat")
 router = APIRouter()
@@ -43,6 +43,19 @@ def _sse_log(level: str, message: str) -> str:
         }
     )
     return f"event: log\ndata: {payload}\n\n"
+
+
+def _sse_eval(payload: dict) -> str:
+    """Format one adherence-evaluation result as a named ``eval`` SSE event.
+
+    Args:
+        payload: A single contract result dict (``key``, ``title``, ``score``,
+            ``rating``, ``color``, ``summary`` and ``findings``).
+
+    Returns:
+        str: A ready-to-yield SSE frame terminated by a blank line.
+    """
+    return f"event: eval\ndata: {json.dumps(payload)}\n\n"
 
 
 def _tool_log(
@@ -134,6 +147,9 @@ def stream_chat(
         seen_calls: set[str] = set()
         seen_results: set[str] = set()
         answering = False
+        full_reply: list[str] = []
+        calls: dict[str, dict] = {}
+        ran_ok = False
         yield _sse_log(
             "info",
             f"Assembling agent from {len(prompts)} skill(s): {skill_names}.",
@@ -147,8 +163,29 @@ def stream_chat(
                     frame = _tool_log(content, seen_calls, seen_results)
                     if frame:
                         yield frame
+                    ctype = getattr(content, "type", None)
+                    if ctype == "function_call":
+                        name = getattr(content, "name", None)
+                        key = getattr(content, "call_id", None) or name
+                        slot = calls.setdefault(
+                            key, {"name": None, "arguments": ""}
+                        )
+                        if name:
+                            slot["name"] = name
+                        arguments = getattr(content, "arguments", None)
+                        if isinstance(arguments, str):
+                            slot["arguments"] += arguments
+                        elif arguments is not None:
+                            slot["arguments"] = arguments
+                    elif ctype == "function_result":
+                        key = getattr(content, "call_id", None)
+                        slot = calls.setdefault(
+                            key, {"name": None, "arguments": ""}
+                        )
+                        slot["error"] = getattr(content, "exception", None)
                 text = getattr(chunk, "text", None)
                 if text:
+                    full_reply.append(text)
                     if not answering:
                         answering = True
                         yield _sse_log(
@@ -158,10 +195,26 @@ def stream_chat(
                         yield f"data: {line}\n"
                     yield "\n"
             yield _sse_log("done", "Reply complete.")
+            ran_ok = True
         except Exception:
             logger.exception("Chat agent run failed for skills %s", ids)
             yield _sse_log("error", "The agent run failed — see server logs.")
             yield "data: [ERROR]\n\n"
+            ran_ok = False
+        if ran_ok:
+            yield _sse_log("info", "Evaluating the run…")
+            try:
+                for payload in await adherence.run_all(
+                    q, "".join(full_reply), prompts, calls
+                ):
+                    yield _sse_eval(payload)
+            except Exception:
+                logger.exception(
+                    "Post-run evaluation failed for skills %s", ids
+                )
+                yield _sse_log(
+                    "error", "Evaluation step failed — see server logs."
+                )
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_source(), media_type="text/event-stream")

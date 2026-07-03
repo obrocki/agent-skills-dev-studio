@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useRef, useState } from 'react'
 import Tree from './components/Tree.jsx'
 import Editor from './components/Editor.jsx'
 import Chat from './components/Chat.jsx'
@@ -26,6 +26,9 @@ export default function App() {
   const [activeSkills, setActiveSkills] = useState([])
   const [health, setHealth] = useState({ status: 'idle', detail: '', endpoint: '', model: '' })
   const [healthBusy, setHealthBusy] = useState(false)
+  const [chatWidth, setChatWidth] = useState(480)
+  const layoutRef = useRef(null)
+  const dragRef = useRef(null)
 
   // Probe the Azure OpenAI endpoint (managed identity) on demand.
   async function checkHealth() {
@@ -62,6 +65,29 @@ export default function App() {
   }
   const activeIds = new Set(activeSkills.map((s) => s.id))
 
+  // Drag the gutter between the editor and chat columns: dragging left widens
+  // the chat/evaluations panel and narrows the skill editor.
+  function startResize(e) {
+    e.preventDefault()
+    dragRef.current = { startX: e.clientX, startWidth: chatWidth }
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }
+  function onResize(e) {
+    if (!dragRef.current) return
+    const max = Math.max(360, (layoutRef.current?.clientWidth || 1280) - 710)
+    const next = dragRef.current.startWidth - (e.clientX - dragRef.current.startX)
+    setChatWidth(Math.round(Math.max(360, Math.min(max, next))))
+  }
+  function endResize(e) {
+    if (!dragRef.current) return
+    dragRef.current = null
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    } catch (_) {
+      /* pointer already released */
+    }
+  }
+
   return (
     <div className="app">
       <header className="topbar">
@@ -91,7 +117,11 @@ export default function App() {
           </button>
         </div>
       </header>
-      <div className="layout">
+      <div
+        className="layout"
+        ref={layoutRef}
+        style={{ gridTemplateColumns: `300px minmax(320px, 1fr) 6px ${chatWidth}px` }}
+      >
         <Tree
           selectedPromptId={selectedPromptId}
           onSelectPrompt={setSelectedPromptId}
@@ -101,6 +131,17 @@ export default function App() {
           onChange={bump}
         />
         <Editor promptId={selectedPromptId} onSaved={bump} />
+        <div
+          className="col-gutter"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize chat panel"
+          title="Drag to resize the chat panel"
+          onPointerDown={startResize}
+          onPointerMove={onResize}
+          onPointerUp={endResize}
+          onPointerCancel={endResize}
+        />
         <Chat activeSkills={activeSkills} />
       </div>
     </div>

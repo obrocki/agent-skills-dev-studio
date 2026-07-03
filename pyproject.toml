@@ -14,6 +14,7 @@ dependencies = [
     "aiohttp>=3.14.1",
     "babel",
     "tzdata",
+    "azure-ai-evaluation>=1.17,<2",
 ]
 
 [dependency-groups]

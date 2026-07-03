@@ -66,12 +66,23 @@ body {
 /* ---------- Layout ---------- */
 .layout {
   flex: 1; min-height: 0; display: grid;
-  grid-template-columns: 300px minmax(0, 1fr) 480px; gap: 16px; padding: 16px;
+  grid-template-columns: 300px minmax(320px, 1fr) 6px 480px; gap: 16px; padding: 16px;
 }
 .layout > * {
   min-height: 0; overflow: auto; background: var(--panel); border: 1px solid var(--border);
   border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px 16px 18px;
 }
+.layout > .col-gutter {
+  background: none; border: none; border-radius: 0; box-shadow: none;
+  padding: 0; overflow: visible; align-self: stretch; position: relative;
+  cursor: col-resize; touch-action: none;
+}
+.col-gutter::before {
+  content: ""; position: absolute; inset: 0 auto 0 50%;
+  width: 2px; transform: translateX(-50%);
+  background: var(--border); border-radius: 2px; transition: background .15s;
+}
+.col-gutter:hover::before, .col-gutter:active::before { background: var(--accent); }
 
 /* ---------- Panel header ---------- */
 .panel-head {
@@ -273,8 +284,21 @@ input:not([type="checkbox"]):not([type="radio"]):focus, textarea:focus { outline
 .finding .tag.conflict, .finding .tag.contradiction { background: var(--danger); }
 .finding .tag.overlap { background: var(--warn); }
 .finding .tag.gap { background: var(--accent); }
+.finding .tag.adherence { background: var(--accent); }
+.finding .tag.tool-call { background: var(--warn); }
 .finding-detail { color: var(--text); line-height: 1.45; }
 .finding-detail em { color: var(--muted); font-style: normal; font-weight: 600; }
+
+/* ---------- Run evaluations panel ---------- */
+.evals { margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+.evals-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  font-size: .72rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+}
+.evals .conflict {
+  margin-top: 0; border: 1px solid var(--line); border-top: 1px solid var(--line);
+  background: var(--panel-2); border-radius: 12px; padding: 11px 12px;
+}
 
 /* ---------- Chat activity log ---------- */
 .chat-logs {

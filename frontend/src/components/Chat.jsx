@@ -10,6 +10,7 @@ export default function Chat({ activeSkills }) {
   const [evalResult, setEvalResult] = useState(null)
   const [evalBusy, setEvalBusy] = useState(false)
   const [logs, setLogs] = useState([])
+  const [evals, setEvals] = useState([])
   const outRef = useRef(null)
   const logsRef = useRef(null)
 
@@ -63,6 +64,7 @@ export default function Chat({ activeSkills }) {
     // Show the user's message immediately, with an empty assistant bubble to stream into.
     setMessages((prev) => [...prev, { role: 'user', text: userText }, { role: 'assistant', text: '' }])
     setBusy(true)
+    setEvals([])
     pushLog('send', `Sent: ${userText}`)
 
     const appendToReply = (chunk) =>
@@ -89,6 +91,16 @@ export default function Chat({ activeSkills }) {
         pushLog(d.level || 'info', d.msg || '')
       } catch {
         /* ignore a malformed log frame */
+      }
+    })
+    // Evaluation cards arrive on a dedicated `eval` event; replace any prior
+    // card with the same key so late frames update in place.
+    es.addEventListener('eval', (e) => {
+      try {
+        const d = JSON.parse(e.data)
+        setEvals((prev) => [...prev.filter((x) => x.key !== d.key), d])
+      } catch {
+        /* ignore malformed eval frame */
       }
     })
     es.onopen = () => pushLog('info', 'Connected to agent stream.')
@@ -239,12 +251,22 @@ export default function Chat({ activeSkills }) {
           )}
         </div>
       </div>
+
+      {evals.length > 0 && (
+        <div className="evals">
+          <div className="evals-head"><span>Run evaluations</span></div>
+          {['skill', 'task', 'tools']
+            .map((k) => evals.find((e) => e.key === k))
+            .filter(Boolean)
+            .map((ev) => <ConflictReport key={ev.key} title={ev.title} result={ev} />)}
+        </div>
+      )}
     </div>
   )
 }
 
 // Compatibility score + findings for the active skill combination.
-function ConflictReport({ busy, result }) {
+function ConflictReport({ busy, result, title = 'Skill compatibility' }) {
   if (busy && !result) {
     return (
       <div className="conflict conflict-loading">
@@ -261,7 +283,7 @@ function ConflictReport({ busy, result }) {
   return (
     <div className="conflict">
       <div className="val-head">
-        <span>Skill compatibility</span>
+        <span>{title}</span>
         <span className="val-score">{unavailable ? '—' : `${result.score}/100`}</span>
       </div>
       {!unavailable && (

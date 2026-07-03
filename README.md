@@ -50,7 +50,7 @@ flowchart LR
 
     API --> Chat
     Chat -->|Entra ID token| AOAI["Azure OpenAI"]
-    Chat -->|code tool| Exec["Sandboxed Python<br/>(subprocess)"]
+    S1 -->|run_a tool| Exec["Sandboxed Python<br/>(subprocess)"]
 ```
 
 > [!NOTE]
@@ -67,6 +67,16 @@ Skills are assembled per request, not baked into the agent. Each time you chat, 
 A skill can do more than instruct the model: it can carry self-contained Python that runs as part of the invocation. Add code in the editor's **Python code** pane, and when the skill is active the agent gets a matching `run_<skill>` tool. The model calls it when the skill's instructions ask, the code runs, and its output flows back into the reply.
 
 The code runs in an isolated subprocess with a timeout, a scrubbed environment, and resource limits. This is deliberate, sandboxed execution for a local, single-user studio, not a boundary for untrusted input, so only run code you trust.
+
+
+> [!WARNING]
+> **Experimental, naive isolation — treat skill Python as fully trusted code.** `backend/skill_exec.py` is not a security boundary. Authored code still runs as your OS user and can:
+>
+> - read and write your local filesystem, including this repository and your `.env`;
+> - make unrestricted outbound network calls, including to the Azure Instance Metadata Service (`169.254.169.254`) — so it could mint a **managed-identity token** and reach your Azure resources;
+> - import any package in the app's virtual environment (for example `azure-identity`, `httpx`).
+>
+> The CPU/process/timeout limits and environment scrubbing curb accidental damage, not a malicious skill. Only run skills whose Python you wrote or fully trust, keep this app single-user and unexposed, and run it in a disposable, network-restricted environment such as the provided dev container.
 
 Your browser's timezone and locale travel with each chat message, so a skill can localize what it returns. The code receives a JSON object on stdin with `time_zone`, `locale`, and `user_input`, and prints its result to stdout.
 

@@ -22,6 +22,11 @@ from agent_framework import (
     SkillsProvider,
 )
 from agent_framework.openai import OpenAIChatClient
+from azure.identity import (
+    ClientSecretCredential as SyncClientSecretCredential,
+    DefaultAzureCredential as SyncDefaultAzureCredential,
+    ManagedIdentityCredential as SyncManagedIdentityCredential,
+)
 from azure.identity.aio import (
     ClientSecretCredential,
     DefaultAzureCredential,
@@ -216,6 +221,118 @@ def build_agent(
         context_providers=[SkillsProvider(skills)],
         tools=tools,
     )
+
+
+def run_tool_names(prompts) -> list[str]:
+    """Return the runtime ``run_*`` tool names for code-bearing prompts.
+
+    Mirrors :func:`build_agent`'s tool selection so the expected tool names used
+    by adherence checks never drift from the names actually attached to the
+    agent: a prompt contributes a tool only when it carries non-blank ``code``,
+    and the name is derived from the same slugged skill name.
+
+    Args:
+        prompts: A single prompt object or a list of them, each exposing
+            ``name`` and optionally ``code``.
+
+    Returns:
+        list[str]: The ``run_*`` tool names, in prompt order, for every prompt
+        that carries executable code.
+    """
+    plist = prompts if isinstance(prompts, list) else [prompts]
+    skills = _to_skills(plist)
+    return [
+        _tool_name(s.frontmatter.name)
+        for p, s in zip(plist, skills)
+        if (getattr(p, "code", "") or "").strip()
+    ]
+
+
+def run_tool_definitions(prompts) -> list[dict]:
+    """Return OpenAI-style tool schemas for code-bearing prompts.
+
+    Mirrors :func:`run_tool_names`' selection so the schemas handed to the
+    tool-call adherence evaluator describe exactly the ``run_*`` tools the agent
+    was offered: one entry per prompt that carries non-blank ``code``, named
+    from the same slugged skill name, with a single ``user_input`` string
+    parameter matching :func:`_make_skill_tool`.
+
+    Args:
+        prompts: A single prompt object or a list of them, each exposing
+            ``name``, ``description``, and optionally ``code``.
+
+    Returns:
+        list[dict]: ``{"name", "description", "parameters"}`` schemas, in prompt
+        order, for every prompt that carries executable code.
+    """
+    plist = prompts if isinstance(prompts, list) else [prompts]
+    skills = _to_skills(plist)
+    return [
+        {
+            "name": _tool_name(s.frontmatter.name),
+            "description": (
+                s.frontmatter.description
+                or f"Execute the {s.frontmatter.name} skill."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "user_input": {
+                        "type": "string",
+                        "description": "Input for the skill.",
+                    }
+                },
+            },
+        }
+        for p, s in zip(plist, skills)
+        if (getattr(p, "code", "") or "").strip()
+    ]
+
+
+def build_sync_credential(settings: config.Settings | None = None):
+    """Select a synchronous Azure credential by priority.
+
+    Mirrors :func:`_build_credential`'s priority but returns a **synchronous**
+    credential from :mod:`azure.identity` (not ``azure.identity.aio``), because
+    the Azure AI Evaluation SDK judges call ``credential.get_token(...)``
+    synchronously from their own thread. The first applicable mode is used:
+
+    1. Service principal (``ClientSecretCredential``) when a client secret,
+       client id, and tenant id are all available.
+    2. User-assigned managed identity (``ManagedIdentityCredential``) when a
+       managed-identity client id is available.
+    3. ``DefaultAzureCredential`` (for example, the local ``az login``).
+
+    Args:
+        settings: The loaded configuration. Loaded via
+            :func:`backend.config.load_settings` when omitted.
+
+    Returns:
+        A synchronous token credential from :mod:`azure.identity`.
+    """
+    settings = settings or config.load_settings()
+    if (
+        settings.sp_client_secret
+        and settings.sp_client_id
+        and settings.sp_tenant_id
+    ):
+        logger.info(
+            "Authenticating judge with service principal (client id %s).",
+            settings.sp_client_id,
+        )
+        return SyncClientSecretCredential(
+            tenant_id=settings.sp_tenant_id,
+            client_id=settings.sp_client_id,
+            client_secret=settings.sp_client_secret,
+        )
+    if settings.mi_client_id:
+        logger.info(
+            "Authenticating judge with managed identity (client id %s).",
+            settings.mi_client_id,
+        )
+        return SyncManagedIdentityCredential(client_id=settings.mi_client_id)
+    logger.info("Authenticating judge with DefaultAzureCredential.")
+    return SyncDefaultAzureCredential()
 
 
 async def check_health() -> dict:
