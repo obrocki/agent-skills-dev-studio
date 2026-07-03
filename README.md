@@ -10,7 +10,7 @@
 ![Microsoft Agent Framework](https://img.shields.io/badge/Microsoft%20Agent%20Framework-Skills-7A41DC?logo=microsoft&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-<img width="2822" height="1849" alt="image" src="https://github.com/user-attachments/assets/44a0a5ed-1a67-4bc6-b31d-ea7f8407f997" />
+![Agent Skills Dev Studio main panel](docs/main-panel.png)
 
 **Agent Skills Dev Studio** is a local, single-user web portal for authoring Microsoft Agent Skills and watching how they behave, both on their own and combined, against a live Azure OpenAI agent. Group skills into projects, edit them in Markdown with a live best-practices score, keep a full version history, optionally attach self-contained Python that runs as a tool during the chat, then select several at once and chat with the single agent they form.
 
