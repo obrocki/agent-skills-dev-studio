@@ -1,5 +1,19 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api.js'
+
+const RUN_EVAL_ORDER = ['skill', 'task', 'tools']
+
+function formatTimestamp(value) {
+  if (!value) return '—'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
+}
+
+function turnLabel(turn, revisionName) {
+  const text = (turn.query || '').trim()
+  const snippet = text.length > 42 ? `${text.slice(0, 42)}…` : text || 'Untitled turn'
+  return `${revisionName || 'Revision'} · ${snippet} · ${formatTimestamp(turn.created_at)}`
+}
 
 // Right column: pick one or more active skills (left checkboxes), see how they
 // combine, check them for conflicts, and stream a reply from the multi-skill agent.
@@ -11,6 +25,16 @@ export default function Chat({ activeSkills }) {
   const [evalBusy, setEvalBusy] = useState(false)
   const [logs, setLogs] = useState([])
   const [evals, setEvals] = useState([])
+  const [revisions, setRevisions] = useState([])
+  const [allTurns, setAllTurns] = useState([])
+  const [revisionTurns, setRevisionTurns] = useState([])
+  const [selectedRevisionId, setSelectedRevisionId] = useState('')
+  const [compareIds, setCompareIds] = useState({ baseline: '', candidate: '' })
+  const [comparison, setComparison] = useState(null)
+  const [historyBusy, setHistoryBusy] = useState(false)
+  const [renameDraft, setRenameDraft] = useState('')
+  const [renameBusy, setRenameBusy] = useState(false)
+  const [historyStatus, setHistoryStatus] = useState('')
   const outRef = useRef(null)
   const logsRef = useRef(null)
 
@@ -23,6 +47,36 @@ export default function Chat({ activeSkills }) {
   const activeIds = activeSkills.map((s) => s.id)
   const activeKey = activeIds.join(',')
   const hasSkills = activeIds.length > 0
+  const selectedRevision = revisions.find((revision) => revision.id === selectedRevisionId) || null
+  const revisionNameById = useMemo(
+    () => Object.fromEntries(revisions.map((revision) => [revision.id, revision.name])),
+    [revisions]
+  )
+
+  async function refreshHistory(preferredRevisionId) {
+    setHistoryBusy(true)
+    try {
+      const [nextRevisions, nextTurns] = await Promise.all([
+        api.listAgentRevisions(),
+        api.listChatTurns(),
+      ])
+      setRevisions(nextRevisions)
+      setAllTurns(nextTurns)
+      setSelectedRevisionId((current) => {
+        const preferred = preferredRevisionId || current
+        if (preferred && nextRevisions.some((revision) => revision.id === preferred)) {
+          return preferred
+        }
+        return nextRevisions[0]?.id || ''
+      })
+    } finally {
+      setHistoryBusy(false)
+    }
+  }
+
+  useEffect(() => {
+    refreshHistory()
+  }, [])
 
   // Re-check skill compatibility (debounced) whenever the active set changes.
   useEffect(() => {
@@ -57,10 +111,52 @@ export default function Chat({ activeSkills }) {
     if (el) el.scrollTop = el.scrollHeight
   }, [logs])
 
+  useEffect(() => {
+    if (!selectedRevisionId) {
+      setRevisionTurns([])
+      setRenameDraft('')
+      return
+    }
+    setRenameDraft(selectedRevision?.name || '')
+    api.listChatTurns(selectedRevisionId).then(setRevisionTurns).catch(() => setRevisionTurns([]))
+  }, [selectedRevisionId, selectedRevision?.name])
+
+  useEffect(() => {
+    if (!compareIds.baseline || !compareIds.candidate || compareIds.baseline === compareIds.candidate) {
+      setComparison(null)
+      return
+    }
+    let cancelled = false
+    api.compareChatTurns(compareIds.baseline, compareIds.candidate)
+      .then((result) => {
+        if (!cancelled) setComparison(result)
+      })
+      .catch(() => {
+        if (!cancelled) setComparison(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [compareIds])
+
+  async function renameRevision() {
+    const nextName = renameDraft.trim()
+    if (!selectedRevisionId || !nextName) return
+    setRenameBusy(true)
+    try {
+      await api.renameAgentRevision(selectedRevisionId, nextName)
+      setHistoryStatus(`Renamed revision to ${nextName}.`)
+      await refreshHistory(selectedRevisionId)
+    } finally {
+      setRenameBusy(false)
+    }
+  }
+
   function send() {
     if (!hasSkills || busy || !q.trim()) return
     const userText = q.trim()
     setQ('')
+    setHistoryStatus('')
     // Show the user's message immediately, with an empty assistant bubble to stream into.
     setMessages((prev) => [...prev, { role: 'user', text: userText }, { role: 'assistant', text: '' }])
     setBusy(true)
@@ -101,6 +197,20 @@ export default function Chat({ activeSkills }) {
         setEvals((prev) => [...prev.filter((x) => x.key !== d.key), d])
       } catch {
         /* ignore malformed eval frame */
+      }
+    })
+    es.addEventListener('history', (e) => {
+      try {
+        const d = JSON.parse(e.data)
+        setHistoryStatus(`Saved run to ${d.revision.name}.`)
+        setSelectedRevisionId(d.revision.id)
+        setCompareIds((prev) => ({
+          baseline: prev.baseline || d.turn.id,
+          candidate: prev.candidate,
+        }))
+        refreshHistory(d.revision.id)
+      } catch {
+        /* ignore malformed history frame */
       }
     })
     es.onopen = () => pushLog('info', 'Connected to agent stream.')
@@ -167,6 +277,167 @@ export default function Chat({ activeSkills }) {
         )}
         {activeIds.length >= 2 && <ConflictReport busy={evalBusy} result={evalResult} />}
       </div>
+
+      <div className="history-shell">
+        <div className="history-browser">
+          <div className="history-head">
+            <span>Agent revisions</span>
+            <span className="logs-count">{historyBusy ? '…' : revisions.length}</span>
+          </div>
+          {historyStatus ? <p className="history-status">{historyStatus}</p> : null}
+          {revisions.length === 0 ? (
+            <p className="logs-empty">Completed runs create revisions automatically.</p>
+          ) : (
+            <div className="revision-list">
+              {revisions.map((revision) => (
+                <button
+                  key={revision.id}
+                  type="button"
+                  className={`revision-card ${revision.id === selectedRevisionId ? 'active' : ''}`}
+                  onClick={() => setSelectedRevisionId(revision.id)}
+                >
+                  <span className="revision-name">{revision.name}</span>
+                  <span className="revision-meta">
+                    {revision.turn_count} turn{revision.turn_count === 1 ? '' : 's'} · {formatTimestamp(revision.last_run_at || revision.updated_at)}
+                  </span>
+                  <span className="revision-metrics">
+                    <MetricPill label="compat" value={revision.scores?.pre_run} />
+                    <MetricPill label="skill" value={revision.scores?.skill} />
+                    <MetricPill label="task" value={revision.scores?.task} />
+                    <MetricPill label="tools" value={revision.scores?.tools} />
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+          {selectedRevision && (
+            <div className="revision-detail">
+              <div className="history-head compact">
+                <span>Selected revision</span>
+              </div>
+              <div className="rename-row">
+                <input
+                  value={renameDraft}
+                  onChange={(e) => setRenameDraft(e.target.value)}
+                  aria-label="Revision name"
+                />
+                <button type="button" onClick={renameRevision} disabled={renameBusy || !renameDraft.trim()}>
+                  Rename
+                </button>
+              </div>
+              <div className="chips small">
+                {selectedRevision.prompt_names.map((name, index) => (
+                  <span key={`${name}-${index}`} className="chip">{name}</span>
+                ))}
+              </div>
+              {selectedRevision.tool_names?.length > 0 ? (
+                <p className="history-note">Tools: {selectedRevision.tool_names.join(', ')}</p>
+              ) : (
+                <p className="history-note">Tools: none</p>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="turn-browser">
+          <div className="history-head">
+            <span>Saved turns</span>
+            <span className="logs-count">{selectedRevisionId ? revisionTurns.length : 0}</span>
+          </div>
+          {!selectedRevisionId ? (
+            <p className="logs-empty">Select a revision to inspect its runs.</p>
+          ) : revisionTurns.length === 0 ? (
+            <p className="logs-empty">No turns saved for this revision yet.</p>
+          ) : (
+            <div className="turn-list">
+              {revisionTurns.map((turn) => (
+                <div key={turn.id} className="turn-row">
+                  <button
+                    type="button"
+                    className="turn-card"
+                    onClick={() => setCompareIds((prev) => ({ ...prev, baseline: turn.id }))}
+                  >
+                    <span className="turn-query">{turn.query}</span>
+                    <span className="turn-meta">{formatTimestamp(turn.created_at)}</span>
+                  </button>
+                  <div className="turn-actions">
+                    <button type="button" onClick={() => setCompareIds((prev) => ({ ...prev, baseline: turn.id }))}>
+                      Baseline
+                    </button>
+                    <button type="button" onClick={() => setCompareIds((prev) => ({ ...prev, candidate: turn.id }))}>
+                      Candidate
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <details className="compare-drawer panel-collapse" open={allTurns.length >= 2}>
+        <summary>
+          <span className="collapse-caret" aria-hidden="true" />
+          <span>Turn comparison</span>
+        </summary>
+        {allTurns.length < 2 ? (
+          <p className="check-detail">Run the agent at least twice to compare saved turns.</p>
+        ) : (
+          <>
+            <div className="compare-picks">
+              <label>
+                Baseline
+                <select
+                  value={compareIds.baseline}
+                  onChange={(e) => setCompareIds((prev) => ({ ...prev, baseline: e.target.value }))}
+                >
+                  <option value="">Select a turn…</option>
+                  {allTurns.map((turn) => (
+                    <option key={turn.id} value={turn.id}>
+                      {turnLabel(turn, revisionNameById[turn.revision_id])}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Candidate
+                <select
+                  value={compareIds.candidate}
+                  onChange={(e) => setCompareIds((prev) => ({ ...prev, candidate: e.target.value }))}
+                >
+                  <option value="">Select a turn…</option>
+                  {allTurns.map((turn) => (
+                    <option key={turn.id} value={turn.id}>
+                      {turnLabel(turn, revisionNameById[turn.revision_id])}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            {comparison && (
+              <>
+                <div className="compare-summary">
+                  <MetricDelta label="compatibility" value={comparison.delta.pre_run_score.delta} />
+                  <MetricDelta label="tool calls" value={comparison.delta.tool_calls.delta} />
+                  {comparison.delta.evaluations.map((item) => (
+                    <MetricDelta key={item.key} label={item.title} value={item.delta} />
+                  ))}
+                </div>
+                <div className="compare-grid">
+                  <TurnPanel
+                    title={`Baseline · ${revisionNameById[comparison.baseline.revision_id] || 'Revision'}`}
+                    turn={comparison.baseline}
+                  />
+                  <TurnPanel
+                    title={`Candidate · ${revisionNameById[comparison.candidate.revision_id] || 'Revision'}`}
+                    turn={comparison.candidate}
+                  />
+                </div>
+              </>
+            )}
+          </>
+        )}
+      </details>
 
       <div className="chat-out" ref={outRef}>
         {messages.length === 0 && !busy && (
@@ -255,12 +526,76 @@ export default function Chat({ activeSkills }) {
       {evals.length > 0 && (
         <div className="evals">
           <div className="evals-head"><span>Run evaluations</span></div>
-          {['skill', 'task', 'tools']
+          {RUN_EVAL_ORDER
             .map((k) => evals.find((e) => e.key === k))
             .filter(Boolean)
             .map((ev) => <ConflictReport key={ev.key} title={ev.title} result={ev} />)}
         </div>
       )}
+    </div>
+  )
+}
+
+function MetricPill({ label, value }) {
+  return (
+    <span className="metric-pill">
+      <strong>{label}</strong> {value == null ? '—' : value}
+    </span>
+  )
+}
+
+function MetricDelta({ label, value }) {
+  const cls = value == null ? 'same' : value > 0 ? 'better' : value < 0 ? 'worse' : 'same'
+  const text = value == null ? '—' : value > 0 ? `+${value}` : `${value}`
+  return (
+    <span className={`metric-delta ${cls}`}>
+      <strong>{label}</strong> {text}
+    </span>
+  )
+}
+
+function TurnPanel({ title, turn }) {
+  const evaluations = RUN_EVAL_ORDER
+    .map((key) => turn.evaluations.find((item) => item.key === key))
+    .filter(Boolean)
+  return (
+    <div className="turn-panel">
+      <div className="history-head compact">
+        <span>{title}</span>
+      </div>
+      <p className="turn-meta">{formatTimestamp(turn.created_at)}</p>
+      <div className="turn-block">
+        <strong>Prompt</strong>
+        <p>{turn.query}</p>
+      </div>
+      <div className="turn-block">
+        <strong>Reply</strong>
+        <p>{turn.answer}</p>
+      </div>
+      <div className="turn-block">
+        <strong>Prompt snapshots</strong>
+        <ul className="mini-list">
+          {turn.prompt_versions.map((item) => (
+            <li key={item.version_id}>{item.prompt_name} · {item.version}</li>
+          ))}
+        </ul>
+      </div>
+      <div className="turn-block">
+        <strong>Tool calls</strong>
+        {turn.tool_calls.length === 0 ? (
+          <p>None</p>
+        ) : (
+          <ul className="mini-list">
+            {turn.tool_calls.map((item) => (
+              <li key={item.call_id}>{item.name || 'tool'}{item.error ? ` · ${item.error}` : ''}</li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <ConflictReport title="Skill compatibility" result={turn.pre_run_evaluation} />
+      {evaluations.map((item) => (
+        <ConflictReport key={item.key} title={item.title} result={item} />
+      ))}
     </div>
   )
 }

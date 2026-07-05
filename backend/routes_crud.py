@@ -44,6 +44,12 @@ class PromptDraft(BaseModel):
     content: str = ""
 
 
+class RevisionRenameIn(BaseModel):
+    """Request body for renaming an agent revision."""
+
+    name: str
+
+
 @router.get("/projects", response_model=list[store.Project])
 def get_projects() -> list[store.Project]:
     return store.list_projects()
@@ -147,3 +153,47 @@ def delete_version(prompt_id: str, version_id: str) -> None:
 def delete_prompt(prompt_id: str) -> None:
     if not store.delete_prompt(prompt_id):
         raise HTTPException(status_code=404, detail="Prompt not found")
+
+
+@router.get("/agent-revisions")
+def get_agent_revisions() -> list[dict]:
+    """Return saved revisions with aggregated summary scores."""
+    return [
+        store.revision_summary(revision)
+        for revision in store.list_agent_revisions()
+    ]
+
+
+@router.get("/agent-revisions/{revision_id}", response_model=store.AgentRevision)
+def get_agent_revision(revision_id: str) -> store.AgentRevision:
+    revision = store.get_agent_revision(revision_id)
+    if revision is None:
+        raise HTTPException(status_code=404, detail="Revision not found")
+    return revision
+
+
+@router.put(
+    "/agent-revisions/{revision_id}", response_model=store.AgentRevision
+)
+def rename_agent_revision(
+    revision_id: str, body: RevisionRenameIn
+) -> store.AgentRevision:
+    revision = store.rename_agent_revision(revision_id, body.name.strip())
+    if revision is None:
+        raise HTTPException(status_code=404, detail="Revision not found")
+    return revision
+
+
+@router.get("/chat-turns", response_model=list[store.ChatTurn])
+def get_chat_turns(revision_id: str | None = None) -> list[store.ChatTurn]:
+    """Return persisted chat turns, optionally for one revision."""
+    return store.list_chat_turns(revision_id=revision_id)
+
+
+@router.get("/chat-turns/compare")
+def compare_chat_turns(baseline_id: str, candidate_id: str) -> dict:
+    """Return comparison-ready data for two saved turns."""
+    result = store.compare_chat_turns(baseline_id, candidate_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Turn not found")
+    return result
