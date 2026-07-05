@@ -375,7 +375,7 @@ export default function Chat({ activeSkills }) {
         </div>
       </div>
 
-      <details className="compare-drawer panel-collapse" open={allTurns.length >= 2}>
+      <details className="compare-drawer panel-collapse" open={allTurns.length >= 2 ? true : undefined}>
         <summary>
           <span className="collapse-caret" aria-hidden="true" />
           <span>Turn comparison</span>

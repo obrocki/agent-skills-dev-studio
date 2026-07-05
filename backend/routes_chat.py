@@ -194,7 +194,7 @@ def stream_chat(
         full_reply: list[str] = []
         calls: dict[str, dict] = {}
         ran_ok = False
-        run_started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        run_start_time = datetime.now(timezone.utc).isoformat(timespec="seconds")
         pre_run_eval = {
             "score": None,
             "rating": "Unavailable",
@@ -273,7 +273,7 @@ def stream_chat(
                     tool_calls=_tool_calls_payload(calls),
                     pre_run_evaluation=pre_run_eval,
                     evaluations=payloads,
-                    created_at=run_started_at,
+                    created_at=run_start_time,
                 )
                 yield _sse_history(
                     {
