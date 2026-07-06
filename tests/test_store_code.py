@@ -6,7 +6,9 @@ so the real data files are never touched.
 """
 
 import pytest
+from fastapi.testclient import TestClient
 
+from backend.main import app
 from backend import store
 
 
@@ -19,6 +21,10 @@ def isolated_store(monkeypatch, tmp_path):
     monkeypatch.setattr(
         store, "_VERSIONS_FILE", tmp_path / "prompt_versions.json"
     )
+    monkeypatch.setattr(
+        store, "_REVISIONS_FILE", tmp_path / "agent_revisions.json"
+    )
+    monkeypatch.setattr(store, "_TURNS_FILE", tmp_path / "chat_turns.json")
     return tmp_path
 
 
@@ -65,3 +71,303 @@ def test_prompt_without_code_key_defaults_to_empty():
 
     # Assert
     assert prompt.code == ""
+
+
+def test_ensure_prompt_version_reuses_matching_snapshot(isolated_store):
+    # Arrange
+    project = store.create_project("Demo")
+    prompt = store.create_prompt(project.id, "example", content="body")
+
+    # Act
+    first = store.ensure_prompt_version(prompt, score=12)
+    second = store.ensure_prompt_version(prompt, score=99)
+
+    # Assert
+    assert first.id == second.id
+    assert len(store.list_versions(prompt.id)) == 1
+
+
+def test_save_chat_turn_reuses_revision_by_fingerprint(isolated_store):
+    # Arrange
+    project = store.create_project("Demo")
+    prompt = store.create_prompt(project.id, "example", content="body")
+    version = store.ensure_prompt_version(prompt, score=75)
+    pre = {
+        "score": 88,
+        "rating": "Compatible",
+        "color": "green",
+        "summary": "ok",
+        "findings": [],
+    }
+    evals = [
+        {
+            "key": "skill",
+            "title": "Skill adherence",
+            "score": 91,
+            "rating": "Adherent",
+            "color": "green",
+            "summary": "good",
+            "findings": [],
+        }
+    ]
+    refs = [
+        {
+            "prompt_id": prompt.id,
+            "prompt_name": prompt.name,
+            "version_id": version.id,
+            "version": version.version,
+        }
+    ]
+
+    # Act
+    revision1, turn1 = store.save_chat_turn(
+        query="q1",
+        answer="a1",
+        prompt_ids=[prompt.id],
+        prompt_names=[prompt.name],
+        prompt_versions=refs,
+        tool_names=["run_example"],
+        tool_calls=[],
+        pre_run_evaluation=pre,
+        evaluations=evals,
+    )
+    revision2, turn2 = store.save_chat_turn(
+        query="q2",
+        answer="a2",
+        prompt_ids=[prompt.id],
+        prompt_names=[prompt.name],
+        prompt_versions=refs,
+        tool_names=["run_example"],
+        tool_calls=[],
+        pre_run_evaluation=pre,
+        evaluations=evals,
+    )
+
+    # Assert
+    assert revision1.id == revision2.id
+    assert turn1.revision_id == revision1.id
+    assert turn2.revision_id == revision1.id
+    saved = store.get_agent_revision(revision1.id)
+    assert saved is not None
+    assert saved.turn_count == 2
+
+
+def test_add_chat_turn_accepts_prompt_version_ref_models(isolated_store):
+    # Arrange
+    project = store.create_project("Demo")
+    prompt = store.create_prompt(project.id, "example", content="body")
+    version = store.ensure_prompt_version(prompt, score=75)
+    revision = store.upsert_agent_revision(
+        prompt_ids=[prompt.id],
+        prompt_names=[prompt.name],
+        prompt_versions=[
+            store.PromptVersionRef(
+                prompt_id=prompt.id,
+                prompt_name=prompt.name,
+                version_id=version.id,
+                version=version.version,
+            )
+        ],
+        tool_names=["run_example"],
+        pre_run_evaluation={},
+        evaluations=[],
+    )
+
+    # Act
+    turn = store.add_chat_turn(
+        revision_id=revision.id,
+        query="q1",
+        answer="a1",
+        prompt_ids=[prompt.id],
+        prompt_names=[prompt.name],
+        prompt_versions=[
+            store.PromptVersionRef(
+                prompt_id=prompt.id,
+                prompt_name=prompt.name,
+                version_id=version.id,
+                version=version.version,
+            )
+        ],
+        tool_names=["run_example"],
+        tool_calls=[],
+        pre_run_evaluation={},
+        evaluations=[],
+    )
+
+    # Assert
+    assert turn.prompt_versions[0].version_id == version.id
+
+
+def test_list_revision_summaries_reads_turns_once(isolated_store, monkeypatch):
+    # Arrange
+    project = store.create_project("Demo")
+    prompt = store.create_prompt(project.id, "example", content="body")
+    version = store.ensure_prompt_version(prompt, score=75)
+    refs = [
+        {
+            "prompt_id": prompt.id,
+            "prompt_name": prompt.name,
+            "version_id": version.id,
+            "version": version.version,
+        }
+    ]
+    pre = {
+        "score": 88,
+        "rating": "Compatible",
+        "color": "green",
+        "summary": "ok",
+        "findings": [],
+    }
+    store.save_chat_turn(
+        query="q1",
+        answer="a1",
+        prompt_ids=[prompt.id],
+        prompt_names=[prompt.name],
+        prompt_versions=refs,
+        tool_names=["run_example"],
+        tool_calls=[],
+        pre_run_evaluation=pre,
+        evaluations=[],
+    )
+    store.save_chat_turn(
+        query="q2",
+        answer="a2",
+        prompt_ids=[prompt.id],
+        prompt_names=[f"{prompt.name} 2"],
+        prompt_versions=refs,
+        tool_names=["run_example", "run_other"],
+        tool_calls=[],
+        pre_run_evaluation=pre,
+        evaluations=[],
+    )
+    real_read = store._read
+    turns_reads = 0
+
+    def counting_read(path):
+        nonlocal turns_reads
+        if path == store._TURNS_FILE:
+            turns_reads += 1
+        return real_read(path)
+
+    monkeypatch.setattr(store, "_read", counting_read)
+
+    # Act
+    summaries = store.list_revision_summaries()
+
+    # Assert
+    assert len(summaries) == 2
+    assert turns_reads == 1
+
+
+def test_compare_chat_turns_returns_score_deltas(isolated_store):
+    # Arrange
+    project = store.create_project("Demo")
+    prompt = store.create_prompt(project.id, "example", content="body")
+    version = store.ensure_prompt_version(prompt, score=50)
+    refs = [
+        {
+            "prompt_id": prompt.id,
+            "prompt_name": prompt.name,
+            "version_id": version.id,
+            "version": version.version,
+        }
+    ]
+    revision, base = store.save_chat_turn(
+        query="q1",
+        answer="a1",
+        prompt_ids=[prompt.id],
+        prompt_names=[prompt.name],
+        prompt_versions=refs,
+        tool_names=[],
+        tool_calls=[],
+        pre_run_evaluation={
+            "score": 60,
+            "rating": "Minor issues",
+            "color": "yellow",
+            "summary": "base",
+            "findings": [],
+        },
+        evaluations=[
+            {
+                "key": "task",
+                "title": "Task adherence",
+                "score": 55,
+                "rating": "Partial",
+                "color": "yellow",
+                "summary": "base task",
+                "findings": [],
+            }
+        ],
+    )
+    _, candidate = store.save_chat_turn(
+        query="q2",
+        answer="a2",
+        prompt_ids=[prompt.id],
+        prompt_names=[prompt.name],
+        prompt_versions=refs,
+        tool_names=[],
+        tool_calls=[{"call_id": "1", "name": "run_example"}],
+        pre_run_evaluation={
+            "score": 80,
+            "rating": "Compatible",
+            "color": "green",
+            "summary": "candidate",
+            "findings": [],
+        },
+        evaluations=[
+            {
+                "key": "task",
+                "title": "Task adherence",
+                "score": 75,
+                "rating": "Partial",
+                "color": "green",
+                "summary": "candidate task",
+                "findings": [],
+            }
+        ],
+    )
+
+    # Act
+    result = store.compare_chat_turns(base.id, candidate.id)
+
+    # Assert
+    assert revision.id == base.revision_id
+    assert result is not None
+    assert result["delta"]["pre_run_score"]["delta"] == 20
+    assert result["delta"]["tool_calls"]["delta"] == 1
+    assert result["delta"]["evaluations"][0]["delta"] == 20
+
+
+def test_rename_revision_rejects_blank_name(isolated_store):
+    # Arrange
+    client = TestClient(app)
+    project = store.create_project("Demo")
+    prompt = store.create_prompt(project.id, "example", content="body")
+    version = store.ensure_prompt_version(prompt, score=75)
+    revision, _ = store.save_chat_turn(
+        query="q1",
+        answer="a1",
+        prompt_ids=[prompt.id],
+        prompt_names=[prompt.name],
+        prompt_versions=[
+            {
+                "prompt_id": prompt.id,
+                "prompt_name": prompt.name,
+                "version_id": version.id,
+                "version": version.version,
+            }
+        ],
+        tool_names=[],
+        tool_calls=[],
+        pre_run_evaluation={},
+        evaluations=[],
+    )
+
+    # Act
+    response = client.put(
+        f"/api/agent-revisions/{revision.id}",
+        json={"name": "   "},
+    )
+
+    # Assert
+    assert response.status_code == 422

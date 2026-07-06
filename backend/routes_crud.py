@@ -5,7 +5,7 @@ relative (``/projects``, ``/prompts``) to avoid a duplicated prefix.
 """
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from backend import store, validate
 
@@ -42,6 +42,20 @@ class PromptDraft(BaseModel):
     name: str = ""
     description: str = ""
     content: str = ""
+
+
+class RevisionRenameIn(BaseModel):
+    """Request body for renaming an agent revision."""
+
+    name: str = Field(min_length=1)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Revision name must not be blank")
+        return value
 
 
 @router.get("/projects", response_model=list[store.Project])
@@ -147,3 +161,44 @@ def delete_version(prompt_id: str, version_id: str) -> None:
 def delete_prompt(prompt_id: str) -> None:
     if not store.delete_prompt(prompt_id):
         raise HTTPException(status_code=404, detail="Prompt not found")
+
+
+@router.get("/agent-revisions")
+def get_agent_revisions() -> list[dict]:
+    """Return saved revisions with aggregated summary scores."""
+    return store.list_revision_summaries()
+
+
+@router.get("/agent-revisions/{revision_id}", response_model=store.AgentRevision)
+def get_agent_revision(revision_id: str) -> store.AgentRevision:
+    revision = store.get_agent_revision(revision_id)
+    if revision is None:
+        raise HTTPException(status_code=404, detail="Revision not found")
+    return revision
+
+
+@router.put(
+    "/agent-revisions/{revision_id}", response_model=store.AgentRevision
+)
+def rename_agent_revision(
+    revision_id: str, body: RevisionRenameIn
+) -> store.AgentRevision:
+    revision = store.rename_agent_revision(revision_id, body.name)
+    if revision is None:
+        raise HTTPException(status_code=404, detail="Revision not found")
+    return revision
+
+
+@router.get("/chat-turns", response_model=list[store.ChatTurn])
+def get_chat_turns(revision_id: str | None = None) -> list[store.ChatTurn]:
+    """Return persisted chat turns, optionally for one revision."""
+    return store.list_chat_turns(revision_id=revision_id)
+
+
+@router.get("/chat-turns/compare")
+def compare_chat_turns(baseline_id: str, candidate_id: str) -> dict:
+    """Return comparison-ready data for two saved turns."""
+    result = store.compare_chat_turns(baseline_id, candidate_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Turn not found")
+    return result

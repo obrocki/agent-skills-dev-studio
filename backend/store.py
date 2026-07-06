@@ -6,6 +6,7 @@ deleting a project cascades to its prompts.
 """
 
 import datetime
+import hashlib
 import json
 import os
 import tempfile
@@ -18,6 +19,15 @@ _DATA_DIR = Path(__file__).resolve().parent / "data"
 _PROJECTS_FILE = _DATA_DIR / "projects.json"
 _PROMPTS_FILE = _DATA_DIR / "prompts.json"
 _VERSIONS_FILE = _DATA_DIR / "prompt_versions.json"
+_REVISIONS_FILE = _DATA_DIR / "agent_revisions.json"
+_TURNS_FILE = _DATA_DIR / "chat_turns.json"
+
+
+def _now() -> str:
+    """Return a stable UTC timestamp string used by persisted records."""
+    return datetime.datetime.now(datetime.timezone.utc).isoformat(
+        timespec="seconds"
+    )
 
 
 class Project(BaseModel):
@@ -76,6 +86,50 @@ class PromptVersion(BaseModel):
     score: int = 0
 
 
+class PromptVersionRef(BaseModel):
+    """A saved pointer to the exact prompt snapshot used in a run."""
+
+    prompt_id: str
+    prompt_name: str
+    version_id: str
+    version: str
+
+
+class AgentRevision(BaseModel):
+    """A reproducible agent configuration derived from one chat run."""
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    fingerprint: str
+    name: str
+    prompt_ids: list[str] = Field(default_factory=list)
+    prompt_names: list[str] = Field(default_factory=list)
+    prompt_versions: list[PromptVersionRef] = Field(default_factory=list)
+    tool_names: list[str] = Field(default_factory=list)
+    pre_run_evaluation: dict = Field(default_factory=dict)
+    evaluations: list[dict] = Field(default_factory=list)
+    created_at: str = Field(default_factory=_now)
+    updated_at: str = Field(default_factory=_now)
+    last_run_at: str | None = None
+    turn_count: int = 0
+
+
+class ChatTurn(BaseModel):
+    """One persisted user/assistant exchange and its evaluations."""
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    revision_id: str
+    created_at: str = Field(default_factory=_now)
+    query: str
+    answer: str
+    prompt_ids: list[str] = Field(default_factory=list)
+    prompt_names: list[str] = Field(default_factory=list)
+    prompt_versions: list[PromptVersionRef] = Field(default_factory=list)
+    tool_names: list[str] = Field(default_factory=list)
+    tool_calls: list[dict] = Field(default_factory=list)
+    pre_run_evaluation: dict = Field(default_factory=dict)
+    evaluations: list[dict] = Field(default_factory=list)
+
+
 def _read(path: Path) -> list[dict]:
     """Read a JSON list from ``path``; return ``[]`` when missing or empty."""
     if not path.is_file():
@@ -101,6 +155,114 @@ def _write(path: Path, items: list[dict]) -> None:
     finally:
         if tmp.exists():
             tmp.unlink()
+
+
+def _score_of(payload: dict | None) -> int | None:
+    """Return an integer score when a payload exposes one."""
+    if not isinstance(payload, dict):
+        return None
+    try:
+        score = payload.get("score")
+        if score is None:
+            return None
+        return int(round(float(score)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _average_score(values: list[int | None]) -> int | None:
+    """Return the rounded mean of the non-null scores in ``values``."""
+    real = [v for v in values if v is not None]
+    if not real:
+        return None
+    return int(round(sum(real) / len(real)))
+
+
+def _normalize_finding(item: dict) -> dict:
+    """Normalise one evaluation finding for stable storage and hashing."""
+    return {
+        "type": str(item.get("type", "")),
+        "severity": str(item.get("severity", "")),
+        "skills": sorted(str(s) for s in (item.get("skills") or []) if s),
+        "detail": str(item.get("detail", "")),
+    }
+
+
+def normalize_evaluation(payload: dict) -> dict:
+    """Return a stable, order-insensitive evaluation payload."""
+    return {
+        "key": str(payload.get("key", "")),
+        "title": str(payload.get("title", "")),
+        "score": _score_of(payload),
+        "rating": str(payload.get("rating", "")),
+        "color": str(payload.get("color", "")),
+        "summary": str(payload.get("summary", "")),
+        "findings": sorted(
+            (
+                _normalize_finding(item)
+                for item in (payload.get("findings") or [])
+                if isinstance(item, dict)
+            ),
+            key=lambda item: (
+                item["type"],
+                item["severity"],
+                ",".join(item["skills"]),
+                item["detail"],
+            ),
+        ),
+    }
+
+
+def _normalize_prompt_refs(
+    prompt_versions: list[PromptVersionRef | dict],
+) -> list[dict]:
+    """Return prompt-version references in a stable order for hashing/storage."""
+    refs = [
+        ref.model_dump() if isinstance(ref, PromptVersionRef) else dict(ref)
+        for ref in prompt_versions
+    ]
+    refs.sort(key=lambda item: (item["prompt_id"], item["version_id"]))
+    return refs
+
+
+def _prompt_version_ref(ref: PromptVersionRef | dict) -> PromptVersionRef:
+    """Return one validated prompt-version reference model."""
+    return ref if isinstance(ref, PromptVersionRef) else PromptVersionRef(**ref)
+
+
+def revision_fingerprint(
+    prompt_ids: list[str],
+    prompt_versions: list[PromptVersionRef | dict],
+    tool_names: list[str],
+    pre_run_evaluation: dict,
+    evaluations: list[dict],
+) -> str:
+    """Hash the configuration and evaluation contract into one identity."""
+    payload = {
+        "prompt_ids": sorted(prompt_ids),
+        "prompt_versions": _normalize_prompt_refs(prompt_versions),
+        "tool_names": sorted(tool_names),
+        "pre_run_evaluation": normalize_evaluation(pre_run_evaluation),
+        "evaluations": sorted(
+            (normalize_evaluation(item) for item in evaluations),
+            key=lambda item: item["key"],
+        ),
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+
+
+def _default_revision_name(prompt_names: list[str]) -> str:
+    """Return a readable default label for an auto-created revision."""
+    if not prompt_names:
+        return "Agent revision"
+    head = ", ".join((name or "unnamed").strip() for name in prompt_names[:2])
+    if len(prompt_names) > 2:
+        head += f" +{len(prompt_names) - 2}"
+    return f"{head} revision"
 
 
 # --- Projects -------------------------------------------------------------
@@ -241,6 +403,27 @@ def add_version(prompt: Prompt, score: int) -> PromptVersion:
     return version
 
 
+def find_matching_version(prompt: Prompt) -> PromptVersion | None:
+    """Return the newest saved snapshot whose content matches ``prompt``."""
+    for item in reversed(_read(_VERSIONS_FILE)):
+        if item["prompt_id"] != prompt.id:
+            continue
+        if (
+            item.get("name", "") == prompt.name
+            and item.get("description", "") == prompt.description
+            and item.get("content", "") == prompt.content
+            and item.get("code", "") == prompt.code
+        ):
+            return PromptVersion(**item)
+    return None
+
+
+def ensure_prompt_version(prompt: Prompt, score: int) -> PromptVersion:
+    """Return a saved snapshot for ``prompt``, creating one when needed."""
+    version = find_matching_version(prompt)
+    return version if version is not None else add_version(prompt, score)
+
+
 def list_versions(prompt_id: str) -> list[PromptVersion]:
     """Return snapshots for a prompt, newest first."""
     items = [
@@ -263,6 +446,306 @@ def delete_version(prompt_id: str, version_id: str) -> bool:
         return False
     _write(_VERSIONS_FILE, kept)
     return True
+
+
+def list_agent_revisions() -> list[AgentRevision]:
+    """Return all saved agent revisions, newest run first."""
+    revisions = [AgentRevision(**item) for item in _read(_REVISIONS_FILE)]
+    return sorted(
+        revisions,
+        key=lambda item: (item.last_run_at or item.updated_at, item.created_at),
+        reverse=True,
+    )
+
+
+def get_agent_revision(revision_id: str) -> AgentRevision | None:
+    """Return one saved agent revision by id."""
+    for item in _read(_REVISIONS_FILE):
+        if item["id"] == revision_id:
+            return AgentRevision(**item)
+    return None
+
+
+def get_agent_revision_by_fingerprint(fingerprint: str) -> AgentRevision | None:
+    """Return the saved revision for ``fingerprint`` when present."""
+    for item in _read(_REVISIONS_FILE):
+        if item.get("fingerprint") == fingerprint:
+            return AgentRevision(**item)
+    return None
+
+
+def upsert_agent_revision(
+    prompt_ids: list[str],
+    prompt_names: list[str],
+    prompt_versions: list[PromptVersionRef | dict],
+    tool_names: list[str],
+    pre_run_evaluation: dict,
+    evaluations: list[dict],
+    created_at: str | None = None,
+) -> AgentRevision:
+    """Find or create the deterministic revision for one completed run."""
+    normalized_pre = normalize_evaluation(pre_run_evaluation)
+    normalized_evals = [
+        normalize_evaluation(item)
+        for item in sorted(evaluations, key=lambda item: item.get("key", ""))
+    ]
+    refs = [PromptVersionRef(**ref) for ref in _normalize_prompt_refs(prompt_versions)]
+    fingerprint = revision_fingerprint(
+        prompt_ids,
+        refs,
+        tool_names,
+        normalized_pre,
+        normalized_evals,
+    )
+
+    revisions = _read(_REVISIONS_FILE)
+    for item in revisions:
+        if item.get("fingerprint") == fingerprint:
+            item["updated_at"] = created_at or _now()
+            _write(_REVISIONS_FILE, revisions)
+            return AgentRevision(**item)
+
+    revision = AgentRevision(
+        fingerprint=fingerprint,
+        name=_default_revision_name(prompt_names),
+        prompt_ids=prompt_ids,
+        prompt_names=prompt_names,
+        prompt_versions=refs,
+        tool_names=sorted(tool_names),
+        pre_run_evaluation=normalized_pre,
+        evaluations=normalized_evals,
+        created_at=created_at or _now(),
+        updated_at=created_at or _now(),
+    )
+    revisions.append(revision.model_dump())
+    _write(_REVISIONS_FILE, revisions)
+    return revision
+
+
+def rename_agent_revision(revision_id: str, name: str) -> AgentRevision | None:
+    """Rename a saved revision; return ``None`` when not found."""
+    revisions = _read(_REVISIONS_FILE)
+    for item in revisions:
+        if item["id"] == revision_id:
+            item["name"] = name
+            item["updated_at"] = _now()
+            _write(_REVISIONS_FILE, revisions)
+            return AgentRevision(**item)
+    return None
+
+
+def list_chat_turns(revision_id: str | None = None) -> list[ChatTurn]:
+    """Return persisted turns, optionally filtered by revision."""
+    turns = [ChatTurn(**item) for item in _read(_TURNS_FILE)]
+    if revision_id is not None:
+        turns = [turn for turn in turns if turn.revision_id == revision_id]
+    return sorted(turns, key=lambda item: item.created_at, reverse=True)
+
+
+def _score_summary_for_turns(turns: list[ChatTurn]) -> dict[str, int | None]:
+    """Return aggregate scores for one revision's persisted turns."""
+
+    def eval_score(turn: ChatTurn, key: str) -> int | None:
+        for item in turn.evaluations:
+            if item.get("key") == key:
+                return _score_of(item)
+        return None
+
+    return {
+        "pre_run": _average_score(
+            [_score_of(turn.pre_run_evaluation) for turn in turns]
+        ),
+        "skill": _average_score([eval_score(turn, "skill") for turn in turns]),
+        "task": _average_score([eval_score(turn, "task") for turn in turns]),
+        "tools": _average_score([eval_score(turn, "tools") for turn in turns]),
+    }
+
+
+def get_chat_turn(turn_id: str) -> ChatTurn | None:
+    """Return one persisted turn by id."""
+    for item in _read(_TURNS_FILE):
+        if item["id"] == turn_id:
+            return ChatTurn(**item)
+    return None
+
+
+def add_chat_turn(
+    revision_id: str,
+    query: str,
+    answer: str,
+    prompt_ids: list[str],
+    prompt_names: list[str],
+    prompt_versions: list[PromptVersionRef | dict],
+    tool_names: list[str],
+    tool_calls: list[dict],
+    pre_run_evaluation: dict,
+    evaluations: list[dict],
+    created_at: str | None = None,
+) -> ChatTurn:
+    """Persist one evaluated user/assistant exchange."""
+    at = created_at or _now()
+    turn = ChatTurn(
+        revision_id=revision_id,
+        created_at=at,
+        query=query,
+        answer=answer,
+        prompt_ids=prompt_ids,
+        prompt_names=prompt_names,
+        prompt_versions=[_prompt_version_ref(ref) for ref in prompt_versions],
+        tool_names=sorted(tool_names),
+        tool_calls=tool_calls,
+        pre_run_evaluation=normalize_evaluation(pre_run_evaluation),
+        evaluations=[
+            normalize_evaluation(item)
+            for item in sorted(evaluations, key=lambda item: item.get("key", ""))
+        ],
+    )
+    items = _read(_TURNS_FILE)
+    items.append(turn.model_dump())
+    _write(_TURNS_FILE, items)
+
+    revisions = _read(_REVISIONS_FILE)
+    for item in revisions:
+        if item["id"] == revision_id:
+            item["turn_count"] = int(item.get("turn_count", 0)) + 1
+            item["last_run_at"] = at
+            item["updated_at"] = at
+            _write(_REVISIONS_FILE, revisions)
+            break
+    return turn
+
+
+def save_chat_turn(
+    query: str,
+    answer: str,
+    prompt_ids: list[str],
+    prompt_names: list[str],
+    prompt_versions: list[PromptVersionRef | dict],
+    tool_names: list[str],
+    tool_calls: list[dict],
+    pre_run_evaluation: dict,
+    evaluations: list[dict],
+    created_at: str | None = None,
+) -> tuple[AgentRevision, ChatTurn]:
+    """Persist one completed run and return the revision and turn."""
+    at = created_at or _now()
+    revision = upsert_agent_revision(
+        prompt_ids=prompt_ids,
+        prompt_names=prompt_names,
+        prompt_versions=prompt_versions,
+        tool_names=tool_names,
+        pre_run_evaluation=pre_run_evaluation,
+        evaluations=evaluations,
+        created_at=at,
+    )
+    turn = add_chat_turn(
+        revision_id=revision.id,
+        query=query,
+        answer=answer,
+        prompt_ids=prompt_ids,
+        prompt_names=prompt_names,
+        prompt_versions=prompt_versions,
+        tool_names=tool_names,
+        tool_calls=tool_calls,
+        pre_run_evaluation=pre_run_evaluation,
+        evaluations=evaluations,
+        created_at=at,
+    )
+    revision = revision.model_copy(
+        update={
+            "turn_count": revision.turn_count + 1,
+            "last_run_at": at,
+            "updated_at": at,
+        }
+    )
+    return revision, turn
+
+
+def revision_summary(revision: AgentRevision) -> dict:
+    """Return a revision with aggregated turn metrics for browsing."""
+    return {
+        **revision.model_dump(),
+        "scores": _score_summary_for_turns(list_chat_turns(revision.id)),
+    }
+
+
+def list_revision_summaries() -> list[dict]:
+    """Return revision summaries without re-reading turns for each revision."""
+    revisions = list_agent_revisions()
+    turns_by_revision: dict[str, list[ChatTurn]] = {}
+    for turn in list_chat_turns():
+        turns_by_revision.setdefault(turn.revision_id, []).append(turn)
+    return [
+        {
+            **revision.model_dump(),
+            "scores": _score_summary_for_turns(
+                turns_by_revision.get(revision.id, [])
+            ),
+        }
+        for revision in revisions
+    ]
+
+
+def compare_chat_turns(baseline_id: str, candidate_id: str) -> dict | None:
+    """Return two stored turns and score deltas for the compare view."""
+    baseline = get_chat_turn(baseline_id)
+    candidate = get_chat_turn(candidate_id)
+    if baseline is None or candidate is None:
+        return None
+
+    def by_key(turn: ChatTurn) -> dict[str, dict]:
+        return {
+            item.get("key", ""): item
+            for item in turn.evaluations
+            if isinstance(item, dict)
+        }
+
+    base_evals = by_key(baseline)
+    cand_evals = by_key(candidate)
+    keys = sorted(set(base_evals) | set(cand_evals))
+    eval_deltas = []
+    for key in keys:
+        left = base_evals.get(key, {})
+        right = cand_evals.get(key, {})
+        left_score = _score_of(left)
+        right_score = _score_of(right)
+        eval_deltas.append(
+            {
+                "key": key,
+                "title": right.get("title") or left.get("title") or key,
+                "baseline_score": left_score,
+                "candidate_score": right_score,
+                "delta": (
+                    None
+                    if left_score is None or right_score is None
+                    else right_score - left_score
+                ),
+            }
+        )
+
+    base_pre = _score_of(baseline.pre_run_evaluation)
+    cand_pre = _score_of(candidate.pre_run_evaluation)
+    return {
+        "baseline": baseline.model_dump(),
+        "candidate": candidate.model_dump(),
+        "delta": {
+            "pre_run_score": {
+                "baseline": base_pre,
+                "candidate": cand_pre,
+                "delta": (
+                    None
+                    if base_pre is None or cand_pre is None
+                    else cand_pre - base_pre
+                ),
+            },
+            "tool_calls": {
+                "baseline": len(baseline.tool_calls),
+                "candidate": len(candidate.tool_calls),
+                "delta": len(candidate.tool_calls) - len(baseline.tool_calls),
+            },
+            "evaluations": eval_deltas,
+        },
+    }
 
 
 def _delete_versions(prompt_ids: set[str]) -> None:

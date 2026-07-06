@@ -13,10 +13,15 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from backend import adherence, agenteval, chat, store
+from backend import adherence, agenteval, chat, store, validate
 
 logger = logging.getLogger("agent_skill_portal.chat")
 router = APIRouter()
+
+
+def _now() -> str:
+    """Return a stable UTC timestamp string for streamed chat events."""
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def _sse_log(level: str, message: str) -> str:
@@ -39,7 +44,7 @@ def _sse_log(level: str, message: str) -> str:
         {
             "level": level,
             "msg": message,
-            "t": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "t": _now(),
         }
     )
     return f"event: log\ndata: {payload}\n\n"
@@ -56,6 +61,11 @@ def _sse_eval(payload: dict) -> str:
         str: A ready-to-yield SSE frame terminated by a blank line.
     """
     return f"event: eval\ndata: {json.dumps(payload)}\n\n"
+
+
+def _sse_history(payload: dict) -> str:
+    """Format persisted history metadata as a named SSE event."""
+    return f"event: history\ndata: {json.dumps(payload)}\n\n"
 
 
 def _tool_log(
@@ -110,6 +120,42 @@ def _load_prompts(prompt_ids: list[str]) -> list:
     ]
 
 
+def _prompt_version_refs(prompts: list[store.Prompt]) -> list[dict]:
+    """Anchor prompts to saved snapshots so later comparisons stay stable."""
+    refs = []
+    for prompt in prompts:
+        score = validate.validate_skill(
+            prompt.name, prompt.description, prompt.content
+        )["score"]
+        version = store.ensure_prompt_version(prompt, score)
+        refs.append(
+            {
+                "prompt_id": prompt.id,
+                "prompt_name": prompt.name,
+                "version_id": version.id,
+                "version": version.version,
+            }
+        )
+    return refs
+
+
+def _tool_calls_payload(calls: dict[str, dict]) -> list[dict]:
+    """Serialise captured tool invocations into stable saved records."""
+    payload = []
+    for call_id in sorted(calls):
+        item = calls[call_id]
+        payload.append(
+            {
+                "call_id": call_id,
+                "name": item.get("name"),
+                "arguments": item.get("arguments"),
+                "result": item.get("result"),
+                "error": item.get("error"),
+            }
+        )
+    return payload
+
+
 @router.get("/chat")
 def stream_chat(
     q: str = Query(...),
@@ -139,6 +185,9 @@ def stream_chat(
         raise HTTPException(status_code=404, detail="No matching skills found")
 
     agent = chat.build_agent(prompts, time_zone=time_zone, locale=locale)
+    prompt_names = [getattr(prompt, "name", "") or "unnamed" for prompt in prompts]
+    prompt_versions = _prompt_version_refs(prompts)
+    tool_names = chat.run_tool_names(prompts)
     skill_names = ", ".join(
         (getattr(p, "name", "") or "").strip() or "unnamed" for p in prompts
     )[:160]
@@ -150,10 +199,26 @@ def stream_chat(
         full_reply: list[str] = []
         calls: dict[str, dict] = {}
         ran_ok = False
+        run_start_time = _now()
+        pre_run_eval = {
+            "score": None,
+            "rating": "Unavailable",
+            "summary": "Compatibility check did not complete.",
+            "findings": [],
+        }
         yield _sse_log(
             "info",
             f"Assembling agent from {len(prompts)} skill(s): {skill_names}.",
         )
+        yield _sse_log("info", "Anchoring prompt snapshots and scoring the setup…")
+        try:
+            pre_run_eval = await agenteval.evaluate_combination(prompts)
+        except Exception:
+            logger.exception("Pre-run evaluation failed for skills %s", ids)
+            yield _sse_log(
+                "error",
+                "Compatibility check failed — continuing without a saved pre-run score.",
+            )
         yield _sse_log(
             "info", "Contacting Azure OpenAI and streaming the reply…"
         )
@@ -205,16 +270,36 @@ def stream_chat(
         if ran_ok:
             yield _sse_log("info", "Evaluating the run…")
             try:
-                for payload in await adherence.run_all(
+                payloads = await adherence.run_all(
                     q, "".join(full_reply), prompts, calls
-                ):
+                )
+                for payload in payloads:
                     yield _sse_eval(payload)
+                revision, turn = store.save_chat_turn(
+                    query=q,
+                    answer="".join(full_reply),
+                    prompt_ids=ids,
+                    prompt_names=prompt_names,
+                    prompt_versions=prompt_versions,
+                    tool_names=tool_names,
+                    tool_calls=_tool_calls_payload(calls),
+                    pre_run_evaluation=pre_run_eval,
+                    evaluations=payloads,
+                    created_at=run_start_time,
+                )
+                yield _sse_history(
+                    {
+                        "revision": store.revision_summary(revision),
+                        "turn": turn.model_dump(),
+                    }
+                )
             except Exception:
                 logger.exception(
-                    "Post-run evaluation failed for skills %s", ids
+                    "Post-run evaluation/persistence failed for skills %s", ids
                 )
                 yield _sse_log(
-                    "error", "Evaluation step failed — see server logs."
+                    "error",
+                    "Evaluation or history persistence failed — see server logs.",
                 )
         yield "data: [DONE]\n\n"
 

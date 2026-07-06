@@ -315,6 +315,165 @@ input:not([type="checkbox"]):not([type="radio"]):focus, textarea:focus { outline
   background: var(--panel-2); border-radius: 12px; padding: 11px 12px;
 }
 
+/* ---------- Revision history + compare ---------- */
+.history-shell {
+  margin-bottom: 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}
+.history-browser, .turn-browser, .compare-drawer {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-2);
+  padding: 11px 12px;
+}
+.history-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin-bottom: 10px;
+  font-size: .72rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+}
+.history-head.compact { margin-bottom: 8px; }
+.history-status, .history-note {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: .8rem;
+  line-height: 1.45;
+}
+.revision-list, .turn-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.revision-card, .turn-card {
+  width: 100%;
+  text-align: left;
+  background: #fff;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  border-radius: 10px;
+  padding: 10px 11px;
+}
+.revision-card.active {
+  border-color: #c7d2fe;
+  box-shadow: 0 0 0 1px #c7d2fe;
+  background: #f8faff;
+}
+.revision-name, .turn-query {
+  display: block;
+  font-weight: 700;
+  color: var(--text);
+}
+.revision-meta, .turn-meta {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: .76rem;
+  line-height: 1.45;
+}
+.revision-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.metric-pill, .metric-delta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-size: .72rem;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.metric-delta.better { color: var(--success); border-color: rgba(22, 163, 74, .2); background: rgba(22, 163, 74, .08); }
+.metric-delta.worse { color: var(--danger); border-color: rgba(225, 29, 72, .2); background: rgba(225, 29, 72, .08); }
+.metric-delta.same { color: var(--muted); }
+.revision-detail {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.chips.small { margin-top: 0; }
+.rename-row, .compare-picks, .turn-actions, .compare-summary {
+  display: flex;
+  gap: 8px;
+}
+.rename-row { margin-bottom: 10px; }
+.rename-row input { flex: 1; }
+.turn-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+}
+.turn-actions {
+  flex-direction: column;
+}
+.turn-actions button {
+  padding: 6px 10px;
+  font-size: .75rem;
+}
+.compare-drawer { margin-bottom: 12px; }
+.compare-drawer summary {
+  display: flex; align-items: center; gap: 8px;
+  cursor: pointer;
+  font-size: .78rem; font-weight: 700;
+  color: var(--text);
+}
+.compare-picks {
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+.compare-picks label {
+  flex: 1;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: .78rem;
+  color: var(--muted);
+}
+.compare-summary {
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+.compare-grid {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.turn-panel {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  padding: 11px 12px;
+}
+.turn-block {
+  margin-top: 10px;
+  font-size: .83rem;
+}
+.turn-block strong {
+  display: block;
+  margin-bottom: 4px;
+}
+.turn-block p {
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: 1.5;
+  color: var(--text);
+}
+.mini-list {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--text);
+  font-size: .8rem;
+  line-height: 1.5;
+}
+
 /* ---------- Chat activity log ---------- */
 .chat-logs {
   margin-top: 12px; flex: none; display: flex; flex-direction: column; min-height: 0;
@@ -375,6 +534,9 @@ input:not([type="checkbox"]):not([type="radio"]):focus, textarea:focus { outline
   .md-split { grid-template-columns: 1fr; height: auto; resize: none; overflow: visible; }
   .md-split > textarea { min-height: 240px; resize: vertical; }
   .md-split > .preview { height: auto; min-height: 160px; }
+  .history-shell, .compare-grid { grid-template-columns: 1fr; }
+  .turn-row { grid-template-columns: 1fr; }
+  .turn-actions { flex-direction: row; }
 }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }

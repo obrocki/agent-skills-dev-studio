@@ -60,4 +60,19 @@ export const api = {
   checkHealth: () => fetch('/api/health').then(jsonOrThrow),
   deletePrompt: (id) =>
     fetch(`/api/prompts/${id}`, { method: 'DELETE' }).then(jsonOrThrow),
+  listAgentRevisions: (options) => fetch('/api/agent-revisions', options).then(jsonOrThrow),
+  renameAgentRevision: (revisionId, name) =>
+    fetch(`/api/agent-revisions/${revisionId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    }).then(jsonOrThrow),
+  listChatTurns: (revisionId, options) => {
+    const query = revisionId ? `?revision_id=${encodeURIComponent(revisionId)}` : ''
+    return fetch(`/api/chat-turns${query}`, options).then(jsonOrThrow)
+  },
+  compareChatTurns: (baselineId, candidateId) =>
+    fetch(
+      `/api/chat-turns/compare?baseline_id=${encodeURIComponent(baselineId)}&candidate_id=${encodeURIComponent(candidateId)}`
+    ).then(jsonOrThrow),
 }
