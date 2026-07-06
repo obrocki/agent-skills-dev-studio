@@ -10,7 +10,9 @@
 ![Microsoft Agent Framework](https://img.shields.io/badge/Microsoft%20Agent%20Framework-Skills-7A41DC?logo=microsoft&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-![Agent Skills Dev Studio main panel](docs/main-panel.png)
+<p align="center">
+  <img src="docs/panel-overview.png" alt="Agent Skills Dev Studio: projects, skill editor, and test chat in one workspace" width="900">
+</p>
 
 **Agent Skills Dev Studio** is a local, single-user web portal for authoring Microsoft Agent Skills and watching how they behave, both on their own and combined, against a live Azure OpenAI agent. Group skills into projects, edit them in Markdown with a live best-practices score, keep a full version history, optionally attach self-contained Python that runs as a tool during the chat, then select several at once and chat with the single agent they form. Every run is graded for adherence, saved as a reusable agent revision, and any two turns can be compared side by side.
 
@@ -68,6 +70,58 @@ flowchart LR
 
     LEFT --> MID --> RIGHT
 ```
+
+### Projects (left column)
+
+<p align="center">
+  <img src="docs/panel-projects.png" alt="Projects column with two projects, skill checkboxes, and drag-and-drop skill creation" width="300">
+</p>
+
+The left column is your skill library. Projects group related skills, and each skill has a checkbox that adds it to the live agent plus a name you click to open it in the editor. To create a skill quickly, drop a Markdown file onto a project, and add an optional Python file alongside it for the skill's code. The file name becomes the skill name, which you can rename later. The drop zone lights up as you drag over it.
+
+### Skill editor (center column)
+
+<p align="center">
+  <img src="docs/panel-editor.png" alt="Skill editor showing name, description, Markdown body with live preview, Python code, best-practices rating, and version history" width="480">
+</p>
+
+The center column authors the selected skill: its name, description, and Markdown body with a live preview beside the source. An optional Python pane carries self-contained code that runs as a tool during the chat. A best-practices rating scores the draft from 0 to 100 and breaks the result into per-check items that update as you type. Every save is snapshotted into version history, so you can reload or delete any past version.
+
+### Test chat (right column)
+
+The right column is the test bench. It combines the active skills into one agent, checks them for conflicts, streams a reply, grades it, and keeps a comparable history. Its four areas are shown below.
+
+#### Skill compatibility
+
+<p align="center">
+  <img src="docs/panel-agent-skills.png" alt="Agent skills chips and a skill compatibility report listing conflicts, contradictions, gaps, and overlaps" width="480">
+</p>
+
+Active skills appear as chips. With two or more selected, an AI judge scores how well they combine from 0 to 100 and lists every conflict, contradiction, overlap, and gap it finds, all before you send a single message.
+
+#### Agent revisions and saved turns
+
+<p align="center">
+  <img src="docs/panel-revisions.png" alt="Agent revisions list with rolled-up scores next to saved turns and baseline or candidate actions" width="480">
+</p>
+
+Each completed run is fingerprinted over its skill version snapshots, tool set, and evaluation contract, then saved as an agent revision whose four scores roll up across every turn it has seen. Identical setups fold into the same revision. Turns are stored individually, and you can rename a revision or send any turn to the comparison view.
+
+#### Turn comparison
+
+<p align="center">
+  <img src="docs/panel-comparison.png" alt="Two saved turns compared side by side with score and tool-call deltas" width="520">
+</p>
+
+Mark any two saved turns as baseline and candidate, even across different revisions, and the compare view reports the deltas for compatibility, tool-call count, and each adherence dimension. Both turns sit side by side, so a wording or selection change is easy to read.
+
+#### Streaming chat, activity log, and adherence
+
+<p align="center">
+  <img src="docs/panel-chat.png" alt="Streaming conversation, activity log tracing tool calls, and adherence cards scoring the run" width="480">
+</p>
+
+Replies stream token by token over server-sent events. The activity log traces the run step by step, from loading each skill to the individual tool calls and the final composition. When the reply lands, three judges grade it for skill, task, and tool-call adherence.
 
 ## Architecture
 
