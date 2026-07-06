@@ -12,7 +12,7 @@
 
 ![Agent Skills Dev Studio main panel](docs/main-panel.png)
 
-**Agent Skills Dev Studio** is a local, single-user web portal for authoring Microsoft Agent Skills and watching how they behave, both on their own and combined, against a live Azure OpenAI agent. Group skills into projects, edit them in Markdown with a live best-practices score, keep a full version history, optionally attach self-contained Python that runs as a tool during the chat, then select several at once and chat with the single agent they form.
+**Agent Skills Dev Studio** is a local, single-user web portal for authoring Microsoft Agent Skills and watching how they behave, both on their own and combined, against a live Azure OpenAI agent. Group skills into projects, edit them in Markdown with a live best-practices score, keep a full version history, optionally attach self-contained Python that runs as a tool during the chat, then select several at once and chat with the single agent they form. Every run is graded for adherence, saved as a reusable agent revision, and any two turns can be compared side by side.
 
 Authentication runs entirely through Microsoft Entra ID (managed identity or `az login`). No API keys or connection strings are stored anywhere.
 
@@ -26,8 +26,48 @@ Authentication runs entirely through Microsoft Entra ID (managed identity or `az
 | Executable skills | Attach self-contained Python that runs as a sandboxed tool during the chat, localized to your browser |
 | Multi-skill agent | Tick several skills and chat with the one agent they combine into |
 | Combination analysis | Flags conflicts, contradictions, overlaps, and gaps between selected skills |
+| Adherence scoring | Each reply is graded for skill, task, and tool-call adherence by Azure AI Evaluation judges |
+| Agent revisions | Every completed run is fingerprinted and saved as a named, reusable revision with rolled-up scores |
+| Turn comparison | Mark any two saved turns as baseline and candidate and read the score and tool-call deltas side by side |
 | Streaming chat | Token-by-token replies over server-sent events |
 | Health check | One click probes the Azure OpenAI endpoint and deployment |
+
+## What's on screen
+
+Three columns, left to right: pick and activate skills, author the selected one, then test the agent they form and grade every run.
+
+```mermaid
+flowchart LR
+    subgraph LEFT["① Projects · left"]
+        direction TB
+        P1["Projects &amp; skills tree"]
+        P2["Tick skills to<br/>activate the agent"]
+        P1 --> P2
+    end
+
+    subgraph MID["② Skill editor · center"]
+        direction TB
+        M1["Name · Description ·<br/>Markdown body"]
+        M2["Python code<br/>(optional, runs as a tool)"]
+        M3["Best-practices rating 0–100"]
+        M4["Version history"]
+        M1 --> M2 --> M3 --> M4
+    end
+
+    subgraph RIGHT["③ Test chat · right"]
+        direction TB
+        R1["Active skill chips"]
+        R2["Skill compatibility 0–100<br/>conflicts · contradictions · overlaps · gaps"]
+        R3["Agent revisions &amp; saved turns"]
+        R4["Turn comparison: baseline vs candidate"]
+        R5["Streaming conversation"]
+        R6["Adherence cards: skill · task · tools"]
+        R7["Activity log"]
+        R1 --> R2 --> R3 --> R4 --> R5 --> R6 --> R7
+    end
+
+    LEFT --> MID --> RIGHT
+```
 
 ## Architecture
 
@@ -35,9 +75,9 @@ Authentication runs entirely through Microsoft Entra ID (managed identity or `az
 flowchart LR
     You([You]) --> SPA["React + Vite SPA"]
     SPA -->|/api| API["FastAPI backend"]
-    API --> Store[("JSON store")]
+    API --> Store[("JSON store<br/>projects · skills · versions<br/>revisions · turns")]
 
-    subgraph Chat["Chat agent: multiple skills compared and combined"]
+    subgraph Chat["Chat run: skills compared, combined, then graded"]
         direction TB
         AF["Agent Framework<br/>SkillsProvider"]
         S1["Skill A"]
@@ -51,6 +91,10 @@ flowchart LR
     API --> Chat
     Chat -->|Entra ID token| AOAI["Azure OpenAI"]
     S1 -->|run_a tool| Exec["Sandboxed Python<br/>(subprocess)"]
+    Chat --> Eval["Adherence judges<br/>skill · task · tools"]
+    Eval -->|Entra ID token| AOAI
+    Eval --> Rev["Agent revision + turn<br/>saved &amp; comparable"]
+    Rev --> Store
 ```
 
 > [!NOTE]
@@ -96,6 +140,21 @@ print(format_datetime(now, format="full", tzinfo=ZoneInfo(tz), locale=locale))
 ```
 
 Ask "what time is it?" with that skill active and the agent calls the tool, then answers with a timestamp localized to your browser, for example `Thursday, July 2, 2026, 11:58:01 AM Eastern Daylight Time`.
+
+## Every run is graded, saved, and comparable
+
+Before the agent runs, the active skills are reviewed together and scored for **compatibility** (0–100), with any conflicts, contradictions, overlaps, and gaps called out. After the reply streams in, three judges from the Azure AI Evaluation SDK grade the run:
+
+- **Skill adherence** — did the reply follow the instructions in the active skills?
+- **Task adherence** — did it actually do what you asked?
+- **Tool-call adherence** — were the expected `run_*` tools invoked with sensible arguments? (Only when an active skill contributes code.)
+
+Each completed run is then fingerprinted over the exact skill version snapshots, the tool set, and the evaluation contract, and saved as an **agent revision**. Runs with an identical setup collapse into the same revision, so its four scores roll up across every turn it has seen. Revisions are named automatically and can be renamed.
+
+Every exchange is also stored as a **turn** — your query, the agent's answer, the tool calls it made, and all four scores. Mark any two turns as **baseline** and **candidate**, even across different revisions, and the compare view reports the deltas for compatibility, tool-call count, and each adherence dimension, with both turns shown side by side.
+
+> [!NOTE]
+> The adherence judges authenticate to Azure OpenAI with the same Microsoft Entra ID credential as the chat agent — no API keys. Revisions and turns persist to the local JSON store, so history survives restarts.
 
 ## Getting started
 
@@ -183,12 +242,14 @@ Grant whichever identity you use the **Cognitive Services OpenAI User** role on 
 
 ```text
 backend/            FastAPI app
-  routes_crud.py    Projects, skills, and version endpoints
-  routes_chat.py    Streaming chat, agent evaluation, health
+  routes_crud.py    Projects, skills, versions, revisions, and turn-compare endpoints
+  routes_chat.py    Streaming chat, adherence evaluation, health
   chat.py           Agent, Azure OpenAI client (Entra ID), skill code tools
   skill_exec.py     Sandboxed subprocess runner for skill Python
+  agenteval.py      Pre-run skill-combination compatibility scoring
+  adherence.py      Skill, task, and tool-call adherence judges (Azure AI Evaluation)
   validate.py       Best-practices scoring
-  store.py          Atomic JSON persistence
+  store.py          Atomic JSON store: projects, skills, versions, revisions, turns
   data/             Runtime store (gitignored)
 frontend/
   src/components/   Tree, Editor, Chat
@@ -200,6 +261,8 @@ start.ps1           Windows launcher
 ## How it works
 
 Skills load through the Agent Framework SkillsProvider instead of being concatenated into one large prompt. Each skill is advertised by name and description, and the agent pulls a full skill body on demand through the `load_skill` tool. When a skill includes Python, the agent also gets a matching `run_<skill>` tool that executes the code in an isolated subprocess and feeds the result back into the reply. Where skills overlap, the agent combines them; where they conflict, it applies the most restrictive rule and points out the conflict. The combination analysis runs the same selection through a scorer that reports conflicts, contradictions, overlaps, and gaps before you start chatting.
+
+After each run the same reply is graded for skill, task, and tool-call adherence, and the whole run — its skill version snapshots, tool calls, and scores — is persisted. Identical setups fold into one agent revision whose scores roll up across turns, and any two saved turns can be compared to see exactly how a wording or selection change moved the numbers.
 
 ## License
 
