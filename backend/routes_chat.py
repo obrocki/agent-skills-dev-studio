@@ -206,7 +206,14 @@ def stream_chat(
             f"Assembling agent from {len(prompts)} skill(s): {skill_names}.",
         )
         yield _sse_log("info", "Anchoring prompt snapshots and scoring the setup…")
-        pre_run_eval = await agenteval.evaluate_combination(prompts)
+        try:
+            pre_run_eval = await agenteval.evaluate_combination(prompts)
+        except Exception:
+            logger.exception("Pre-run evaluation failed for skills %s", ids)
+            yield _sse_log(
+                "error",
+                "Compatibility check failed — continuing without a saved pre-run score.",
+            )
         yield _sse_log(
             "info", "Contacting Azure OpenAI and streaming the reply…"
         )

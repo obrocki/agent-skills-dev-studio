@@ -60,6 +60,7 @@ export default function Chat({ activeSkills }) {
         api.listAgentRevisions(),
         api.listChatTurns(),
       ])
+      setHistoryStatus('')
       setRevisions(nextRevisions)
       setAllTurns(nextTurns)
       setSelectedRevisionId((current) => {
@@ -69,6 +70,8 @@ export default function Chat({ activeSkills }) {
         }
         return nextRevisions[0]?.id || ''
       })
+    } catch {
+      setHistoryStatus('Could not load saved history.')
     } finally {
       setHistoryBusy(false)
     }
@@ -118,7 +121,13 @@ export default function Chat({ activeSkills }) {
       return
     }
     setRenameDraft(selectedRevision?.name || '')
-    api.listChatTurns(selectedRevisionId).then(setRevisionTurns).catch(() => setRevisionTurns([]))
+    const controller = new AbortController()
+    api.listChatTurns(selectedRevisionId, { signal: controller.signal })
+      .then(setRevisionTurns)
+      .catch((error) => {
+        if (error?.name !== 'AbortError') setRevisionTurns([])
+      })
+    return () => controller.abort()
   }, [selectedRevisionId, selectedRevision?.name])
 
   useEffect(() => {

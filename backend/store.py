@@ -225,6 +225,11 @@ def _normalize_prompt_refs(
     return refs
 
 
+def _prompt_version_ref(ref: PromptVersionRef | dict) -> PromptVersionRef:
+    """Return one validated prompt-version reference model."""
+    return ref if isinstance(ref, PromptVersionRef) else PromptVersionRef(**ref)
+
+
 def revision_fingerprint(
     prompt_ids: list[str],
     prompt_versions: list[PromptVersionRef | dict],
@@ -537,6 +542,25 @@ def list_chat_turns(revision_id: str | None = None) -> list[ChatTurn]:
     return sorted(turns, key=lambda item: item.created_at, reverse=True)
 
 
+def _score_summary_for_turns(turns: list[ChatTurn]) -> dict[str, int | None]:
+    """Return aggregate scores for one revision's persisted turns."""
+
+    def eval_score(turn: ChatTurn, key: str) -> int | None:
+        for item in turn.evaluations:
+            if item.get("key") == key:
+                return _score_of(item)
+        return None
+
+    return {
+        "pre_run": _average_score(
+            [_score_of(turn.pre_run_evaluation) for turn in turns]
+        ),
+        "skill": _average_score([eval_score(turn, "skill") for turn in turns]),
+        "task": _average_score([eval_score(turn, "task") for turn in turns]),
+        "tools": _average_score([eval_score(turn, "tools") for turn in turns]),
+    }
+
+
 def get_chat_turn(turn_id: str) -> ChatTurn | None:
     """Return one persisted turn by id."""
     for item in _read(_TURNS_FILE):
@@ -567,7 +591,7 @@ def add_chat_turn(
         answer=answer,
         prompt_ids=prompt_ids,
         prompt_names=prompt_names,
-        prompt_versions=[PromptVersionRef(**ref) for ref in prompt_versions],
+        prompt_versions=[_prompt_version_ref(ref) for ref in prompt_versions],
         tool_names=sorted(tool_names),
         tool_calls=tool_calls,
         pre_run_evaluation=normalize_evaluation(pre_run_evaluation),
@@ -632,29 +656,27 @@ def save_chat_turn(
 
 def revision_summary(revision: AgentRevision) -> dict:
     """Return a revision with aggregated turn metrics for browsing."""
-    turns = list_chat_turns(revision.id)
-
-    def eval_score(turn: ChatTurn, key: str) -> int | None:
-        for item in turn.evaluations:
-            if item.get("key") == key:
-                return _score_of(item)
-        return None
-
     return {
         **revision.model_dump(),
-        "scores": {
-            "pre_run": _average_score(
-                [_score_of(turn.pre_run_evaluation) for turn in turns]
-            ),
-            "skill": _average_score(
-                [eval_score(turn, "skill") for turn in turns]
-            ),
-            "task": _average_score([eval_score(turn, "task") for turn in turns]),
-            "tools": _average_score(
-                [eval_score(turn, "tools") for turn in turns]
-            ),
-        },
+        "scores": _score_summary_for_turns(list_chat_turns(revision.id)),
     }
+
+
+def list_revision_summaries() -> list[dict]:
+    """Return revision summaries without re-reading turns for each revision."""
+    revisions = list_agent_revisions()
+    turns_by_revision: dict[str, list[ChatTurn]] = {}
+    for turn in list_chat_turns():
+        turns_by_revision.setdefault(turn.revision_id, []).append(turn)
+    return [
+        {
+            **revision.model_dump(),
+            "scores": _score_summary_for_turns(
+                turns_by_revision.get(revision.id, [])
+            ),
+        }
+        for revision in revisions
+    ]
 
 
 def compare_chat_turns(baseline_id: str, candidate_id: str) -> dict | None:

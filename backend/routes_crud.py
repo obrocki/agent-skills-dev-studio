@@ -5,7 +5,7 @@ relative (``/projects``, ``/prompts``) to avoid a duplicated prefix.
 """
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from backend import store, validate
 
@@ -47,7 +47,15 @@ class PromptDraft(BaseModel):
 class RevisionRenameIn(BaseModel):
     """Request body for renaming an agent revision."""
 
-    name: str
+    name: str = Field(min_length=1)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Revision name must not be blank")
+        return value
 
 
 @router.get("/projects", response_model=list[store.Project])
@@ -158,10 +166,7 @@ def delete_prompt(prompt_id: str) -> None:
 @router.get("/agent-revisions")
 def get_agent_revisions() -> list[dict]:
     """Return saved revisions with aggregated summary scores."""
-    return [
-        store.revision_summary(revision)
-        for revision in store.list_agent_revisions()
-    ]
+    return store.list_revision_summaries()
 
 
 @router.get("/agent-revisions/{revision_id}", response_model=store.AgentRevision)
@@ -178,7 +183,7 @@ def get_agent_revision(revision_id: str) -> store.AgentRevision:
 def rename_agent_revision(
     revision_id: str, body: RevisionRenameIn
 ) -> store.AgentRevision:
-    revision = store.rename_agent_revision(revision_id, body.name.strip())
+    revision = store.rename_agent_revision(revision_id, body.name)
     if revision is None:
         raise HTTPException(status_code=404, detail="Revision not found")
     return revision
