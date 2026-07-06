@@ -125,7 +125,10 @@ export default function Chat({ activeSkills }) {
     api.listChatTurns(selectedRevisionId, { signal: controller.signal })
       .then(setRevisionTurns)
       .catch((error) => {
-        if (error?.name !== 'AbortError') setRevisionTurns([])
+        if (error?.name !== 'AbortError') {
+          setRevisionTurns([])
+          setHistoryStatus('Could not load turns for this revision.')
+        }
       })
     return () => controller.abort()
   }, [selectedRevisionId, selectedRevision?.name])
