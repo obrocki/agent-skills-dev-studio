@@ -18,11 +18,17 @@ export const api = {
     fetch(`/api/projects/${id}`, { method: 'DELETE' }).then(jsonOrThrow),
   listPrompts: (projectId) =>
     fetch(`/api/projects/${projectId}/prompts`).then(jsonOrThrow),
-  createPrompt: (projectId, name) =>
+  createPrompt: (projectId, name, extra = {}) =>
     fetch('/api/prompts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ project_id: projectId, name, description: '', content: '', code: '' }),
+      body: JSON.stringify({
+        project_id: projectId,
+        name,
+        description: extra.description || '',
+        content: extra.content || '',
+        code: extra.code || '',
+      }),
     }).then(jsonOrThrow),
   getPrompt: (id) => fetch(`/api/prompts/${id}`).then(jsonOrThrow),
   validatePrompt: (id) => fetch(`/api/prompts/${id}/validate`).then(jsonOrThrow),

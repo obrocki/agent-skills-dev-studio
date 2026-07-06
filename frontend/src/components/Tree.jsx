@@ -1,5 +1,49 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
+
+// Recognised skill source files: Markdown becomes the skill body, Python the code.
+const MD_EXT = /\.(md|markdown|mdown|mkd|mdx)$/i
+const PY_EXT = /\.py$/i
+const stripExt = (name) => name.replace(/\.[^./\\]+$/, '')
+
+// Turn a set of dropped files into skill drafts. A Markdown and a Python file
+// that share a base name (or are the only pair dropped) combine into one skill;
+// otherwise each Markdown or Python file becomes its own skill.
+async function filesToSkills(files) {
+  const md = files.filter((f) => MD_EXT.test(f.name))
+  const py = files.filter((f) => PY_EXT.test(f.name))
+
+  // Simple, common case: one Markdown + one Python pair into a single skill,
+  // even when their filenames differ.
+  if (md.length === 1 && py.length === 1) {
+    return [
+      {
+        name: stripExt(md[0].name) || 'Untitled skill',
+        content: await md[0].text(),
+        code: await py[0].text(),
+      },
+    ]
+  }
+
+  // Otherwise group by base filename so like-named files pair up.
+  const groups = new Map()
+  const order = []
+  for (const file of files) {
+    const isMd = MD_EXT.test(file.name)
+    const isPy = PY_EXT.test(file.name)
+    if (!isMd && !isPy) continue
+    const base = stripExt(file.name)
+    const key = base.toLowerCase()
+    if (!groups.has(key)) {
+      groups.set(key, { name: base || 'Untitled skill', content: '', code: '' })
+      order.push(key)
+    }
+    const text = await file.text()
+    if (isMd) groups.get(key).content = text
+    else groups.get(key).code = text
+  }
+  return order.map((k) => groups.get(k))
+}
 
 // Left column: projects expand into prompts. Selecting a prompt loads it center.
 // Uses inline inputs (no window.prompt, which is blocked in embedded browsers).
@@ -8,6 +52,8 @@ export default function Tree({ selectedPromptId, onSelectPrompt, activeIds, onTo
   const [promptsByProject, setPromptsByProject] = useState({})
   const [newProject, setNewProject] = useState('')
   const [promptDrafts, setPromptDrafts] = useState({})
+  const [dragProjectId, setDragProjectId] = useState(null)
+  const fileInputs = useRef({})
 
   async function loadProjects() {
     const list = await api.listProjects()
@@ -42,6 +88,32 @@ export default function Tree({ selectedPromptId, onSelectPrompt, activeIds, onTo
     await api.createPrompt(projectId, name)
     setPromptDrafts((d) => ({ ...d, [projectId]: '' }))
     loadProjects()
+  }
+
+  // Create one or more skills from dropped (or browsed) Markdown/Python files.
+  // The file name becomes the skill name and can be renamed later in the editor.
+  async function createSkillsFromFiles(projectId, fileList) {
+    const files = Array.from(fileList || [])
+    if (!files.length) return
+    const skills = await filesToSkills(files)
+    if (!skills.length) return
+    let firstId = null
+    for (const skill of skills) {
+      const created = await api.createPrompt(projectId, skill.name, {
+        content: skill.content,
+        code: skill.code,
+      })
+      if (!firstId) firstId = created.id
+    }
+    await loadProjects()
+    if (firstId) onSelectPrompt(firstId)
+    onChange()
+  }
+
+  function onDropFiles(projectId, e) {
+    e.preventDefault()
+    setDragProjectId(null)
+    createSkillsFromFiles(projectId, e.dataTransfer?.files)
   }
 
   async function removePrompt(id) {
@@ -128,6 +200,51 @@ export default function Tree({ selectedPromptId, onSelectPrompt, activeIds, onTo
             <button onClick={() => addPrompt(proj.id)} disabled={!(promptDrafts[proj.id] || '').trim()}>
               +
             </button>
+          </div>
+          <div
+            className={`drop-zone${dragProjectId === proj.id ? ' dragging' : ''}`}
+            role="button"
+            tabIndex={0}
+            title="Drop a Markdown (.md) file to create a skill, plus an optional Python (.py) file for its code. The file name becomes the skill name — rename it later in the editor."
+            aria-label={`Drop Markdown and Python files to add a skill to ${proj.name}`}
+            onClick={() => fileInputs.current[proj.id]?.click()}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                fileInputs.current[proj.id]?.click()
+              }
+            }}
+            onDragOver={(e) => {
+              e.preventDefault()
+              setDragProjectId(proj.id)
+            }}
+            onDragLeave={(e) => {
+              e.preventDefault()
+              setDragProjectId((id) => (id === proj.id ? null : id))
+            }}
+            onDrop={(e) => onDropFiles(proj.id, e)}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+            <span>
+              Drop <strong>.md</strong> + optional <strong>.py</strong> to add a skill
+            </span>
+            <input
+              ref={(el) => {
+                fileInputs.current[proj.id] = el
+              }}
+              type="file"
+              multiple
+              accept=".md,.markdown,.mdown,.mkd,.mdx,.py"
+              hidden
+              onChange={(e) => {
+                createSkillsFromFiles(proj.id, e.target.files)
+                e.target.value = ''
+              }}
+            />
           </div>
         </div>
       ))}
