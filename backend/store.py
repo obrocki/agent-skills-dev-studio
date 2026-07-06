@@ -651,7 +651,14 @@ def save_chat_turn(
         evaluations=evaluations,
         created_at=at,
     )
-    return get_agent_revision(revision.id) or revision, turn
+    revision = revision.model_copy(
+        update={
+            "turn_count": revision.turn_count + 1,
+            "last_run_at": at,
+            "updated_at": at,
+        }
+    )
+    return revision, turn
 
 
 def revision_summary(revision: AgentRevision) -> dict:

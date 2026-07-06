@@ -19,6 +19,11 @@ logger = logging.getLogger("agent_skill_portal.chat")
 router = APIRouter()
 
 
+def _now() -> str:
+    """Return a stable UTC timestamp string for streamed chat events."""
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
 def _sse_log(level: str, message: str) -> str:
     """Format one activity-log entry as a named ``log`` server-sent event.
 
@@ -39,7 +44,7 @@ def _sse_log(level: str, message: str) -> str:
         {
             "level": level,
             "msg": message,
-            "t": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "t": _now(),
         }
     )
     return f"event: log\ndata: {payload}\n\n"
@@ -194,7 +199,7 @@ def stream_chat(
         full_reply: list[str] = []
         calls: dict[str, dict] = {}
         ran_ok = False
-        run_start_time = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        run_start_time = _now()
         pre_run_eval = {
             "score": None,
             "rating": "Unavailable",
